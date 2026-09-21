@@ -10,55 +10,134 @@
 <body>
   <header class="site-header">
     <div class="header-inner">
-      <h1 id="site-title">League Activity Feed</h1>
-      <div class="header-meta">
-        <span id="season-label"></span>
-        <button id="refresh-btn" title="Reload live data from Sleeper">↻ Refresh</button>
+      <div class="header-top">
+        <h1 id="site-title">League Activity Feed</h1>
+        <div class="header-meta">
+          <span id="sync-badge" class="sync-badge">
+            <span class="sync-dot"></span> <span id="sync-text">Loading…</span>
+          </span>
+          <button id="refresh-btn" title="Reload live data">↻ Refresh</button>
+        </div>
       </div>
+      <div class="stat-pills" id="stat-pills">
+        <span class="stat-pill"><span class="stat-label">Hard Cap</span><span class="stat-value" id="stat-cap">—</span></span>
+        <span class="stat-pill"><span class="stat-label">Trade Deadline</span><span class="stat-value" id="stat-deadline">—</span></span>
+        <span class="stat-pill"><span class="stat-label">Phase</span><span class="stat-value" id="stat-phase">—</span></span>
+      </div>
+      <nav class="main-nav" id="main-nav">
+        <button class="nav-btn active" data-page="home">Home</button>
+        <button class="nav-btn" data-page="myteam">My Team</button>
+        <button class="nav-btn" data-page="rosters">League Rosters</button>
+        <button class="nav-btn" data-page="leaderboards">Leaderboards</button>
+        <button class="nav-btn" data-page="trade">Trade Machine</button>
+        <button class="nav-btn" data-page="draft">Draft &amp; FA</button>
+        <button class="nav-btn" data-page="rules">Rule Book</button>
+      </nav>
     </div>
   </header>
 
   <main>
-    <section class="controls">
-      <div class="control-group">
-        <label for="team-filter">Team</label>
-        <select id="team-filter">
-          <option value="">All teams</option>
-        </select>
-      </div>
+    <div id="status-line" class="status-line">Loading league data…</div>
 
-      <div class="control-group checkboxes">
-        <label class="checkbox-pill"><input type="checkbox" value="add" checked> Adds</label>
-        <label class="checkbox-pill"><input type="checkbox" value="drop" checked> Drops</label>
-        <label class="checkbox-pill"><input type="checkbox" value="trade" checked> Trades</label>
-        <label class="checkbox-pill"><input type="checkbox" value="taxi_add" checked> Taxi in</label>
-        <label class="checkbox-pill"><input type="checkbox" value="taxi_remove" checked> Taxi out</label>
-      </div>
+    <!-- HOME -->
+    <section id="page-home" class="page">
+      <h2 class="page-heading">Team Cap Health</h2>
+      <div id="cap-matrix" class="cap-matrix"></div>
 
-      <div class="control-group">
-        <label for="search-box">Search player</label>
-        <input type="search" id="search-box" placeholder="Player name…">
+      <h2 class="page-heading">Recent Activity</h2>
+      <section class="controls">
+        <div class="control-group">
+          <label for="team-filter">Team</label>
+          <select id="team-filter">
+            <option value="">All teams</option>
+          </select>
+        </div>
+        <div class="control-group checkboxes">
+          <label class="checkbox-pill"><input type="checkbox" value="add" checked> Adds</label>
+          <label class="checkbox-pill"><input type="checkbox" value="drop" checked> Drops</label>
+          <label class="checkbox-pill"><input type="checkbox" value="trade" checked> Trades</label>
+          <label class="checkbox-pill"><input type="checkbox" value="taxi_add" checked> Taxi in</label>
+          <label class="checkbox-pill"><input type="checkbox" value="taxi_remove" checked> Taxi out</label>
+        </div>
+        <div class="control-group">
+          <label for="search-box">Search player</label>
+          <input type="search" id="search-box" placeholder="Player name…">
+        </div>
+      </section>
+      <section id="feed" class="feed" aria-live="polite"></section>
+      <div id="load-more-wrap" class="load-more-wrap" hidden>
+        <button id="load-more-btn">Load more</button>
       </div>
     </section>
 
-    <div id="status-line" class="status-line">Loading league data from Sleeper…</div>
+    <!-- MY TEAM -->
+    <section id="page-myteam" class="page" hidden>
+      <h2 class="page-heading">My Team</h2>
+      <div class="control-group">
+        <label for="myteam-select">Team</label>
+        <select id="myteam-select"></select>
+      </div>
+      <div id="myteam-body"></div>
+    </section>
 
-    <section id="feed" class="feed" aria-live="polite"></section>
+    <!-- LEAGUE ROSTERS -->
+    <section id="page-rosters" class="page" hidden>
+      <h2 class="page-heading">League Rosters</h2>
+      <div id="rosters-body" class="rosters-grid"></div>
+    </section>
 
-    <div id="load-more-wrap" class="load-more-wrap" hidden>
-      <button id="load-more-btn">Load more</button>
-    </div>
+    <!-- LEADERBOARDS -->
+    <section id="page-leaderboards" class="page" hidden>
+      <h2 class="page-heading">Best Value Contracts</h2>
+      <p class="page-sub">Season points (approx. half-PPR) per dollar of salary. Rankings, not your exact weekly scoring.</p>
+      <div id="lb-value" class="leaderboard-grid"></div>
+
+      <h2 class="page-heading">Highest Paid Players</h2>
+      <div id="lb-highest" class="leaderboard-grid"></div>
+
+      <h2 class="page-heading">Dead Cap Wall</h2>
+      <div id="lb-deadcap" class="leaderboard-grid"></div>
+    </section>
+
+    <!-- TRADE MACHINE -->
+    <section id="page-trade" class="page" hidden>
+      <h2 class="page-heading">Trade Machine</h2>
+      <p class="page-sub">A calculator only — it doesn't submit anything to Sleeper. Retained salary is capped at $50 per the rulebook.</p>
+      <div class="trade-teams">
+        <div class="trade-side" id="trade-side-a"></div>
+        <div class="trade-side" id="trade-side-b"></div>
+      </div>
+    </section>
+
+    <!-- DRAFT & FA -->
+    <section id="page-draft" class="page" hidden>
+      <h2 class="page-heading">Rookie Salary Schedule</h2>
+      <div id="rookie-schedule" class="rule-table"></div>
+
+      <h2 class="page-heading">Free Agency &amp; Waivers</h2>
+      <ul id="fa-rules" class="rule-list"></ul>
+    </section>
+
+    <!-- RULE BOOK -->
+    <section id="page-rules" class="page" hidden>
+      <h2 class="page-heading">Rule Book</h2>
+      <input type="search" id="rules-search" placeholder="Search the rulebook… (e.g. taxi, dead cap, playoff)" class="rules-search">
+      <div id="rules-body"></div>
+    </section>
   </main>
 
   <footer class="site-footer">
     <p>
-      Data pulled live from the <a href="https://docs.sleeper.com/" target="_blank" rel="noopener">Sleeper API</a>.
-      Taxi-squad history is captured by a scheduled GitHub Action since Sleeper doesn't expose it directly —
-      see <code>data/taxi-log.json</code>.
+      Live data from the <a href="https://docs.sleeper.com/" target="_blank" rel="noopener">Sleeper API</a>.
+      Salary figures come from the league's Google Sheet. Taxi-squad history is captured by a scheduled
+      GitHub Action — see <code>data/taxi-log.json</code>.
     </p>
   </footer>
 
   <script src="config.js"></script>
+  <script src="sheet.js"></script>
+  <script src="stats.js"></script>
+  <script src="rulebook.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

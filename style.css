@@ -1,14 +1,17 @@
 :root {
-  --bg: #0f1115;
-  --panel: #171a21;
-  --panel-border: #262a34;
+  --bg: #0d0f14;
+  --panel: #161922;
+  --panel-border: #262b38;
   --text: #e8e9ec;
   --muted: #9099a8;
-  --accent: #5b8def;
-  --add: #35b56a;
-  --drop: #e0555a;
-  --trade: #c98a2c;
-  --taxi: #8a6fe0;
+  --accent: #3b82f6;       /* electric blue — primary/links/trade */
+  --add: #10d97a;          /* emerald — active cap / successful bids */
+  --drop: #f14668;         /* crimson/coral — dead cap / over-cap */
+  --trade: #f0b429;        /* amber/gold — retained salary / taxi */
+  --taxi: #f0b429;
+  --emerald: #10d97a;
+  --amber: #f0b429;
+  --crimson: #f14668;
   --radius: 10px;
 }
 
@@ -32,9 +35,15 @@ a { color: var(--accent); }
 }
 
 .header-inner {
-  max-width: 900px;
+  max-width: 1080px;
   margin: 0 auto;
   padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.header-top {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -55,6 +64,67 @@ a { color: var(--accent); }
   font-size: 0.85rem;
 }
 
+.sync-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.sync-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--add);
+  box-shadow: 0 0 6px var(--add);
+}
+
+.stat-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.stat-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #0d0f14;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.82rem;
+}
+.stat-label {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 0.68rem;
+  letter-spacing: 0.05em;
+}
+.stat-value {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.main-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.nav-btn {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--muted);
+  padding: 7px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.nav-btn:hover { color: var(--text); border-color: var(--accent); }
+.nav-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0d0f14;
+  font-weight: 600;
+}
+
 #refresh-btn {
   background: transparent;
   border: 1px solid var(--panel-border);
@@ -67,10 +137,240 @@ a { color: var(--accent); }
 #refresh-btn:hover { border-color: var(--accent); }
 
 main {
-  max-width: 900px;
+  max-width: 1080px;
   margin: 0 auto;
   padding: 20px;
 }
+
+.page-heading {
+  font-size: 1.05rem;
+  margin: 28px 0 12px;
+}
+.page-heading:first-child { margin-top: 0; }
+.page-sub {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: -6px 0 14px;
+}
+.muted-note { color: var(--muted); font-size: 0.85rem; }
+
+/* Cap Health Matrix */
+.cap-matrix {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+.cap-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+.cap-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cap-team-name { font-weight: 600; }
+.cap-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.badge {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-border);
+}
+.taxi-badge { color: var(--amber); border-color: var(--amber); }
+.compliant-badge { color: var(--emerald); border-color: var(--emerald); }
+.over-cap-badge {
+  color: #fff;
+  background: var(--crimson);
+  border-color: var(--crimson);
+  animation: pulse-warn 1.6s infinite;
+}
+@keyframes pulse-warn {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.cap-bar {
+  display: flex;
+  height: 14px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #0d0f14;
+  border: 1px solid var(--panel-border);
+}
+.cap-seg-active { background: var(--emerald); }
+.cap-seg-dead { background: var(--crimson); }
+.cap-seg-remaining { background: #2b3040; }
+
+.cap-legend {
+  display: flex;
+  gap: 14px;
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+.dot-active { background: var(--emerald); }
+.dot-dead { background: var(--crimson); }
+.dot-remaining { background: #2b3040; }
+
+.salary-tag {
+  font-size: 0.78rem;
+  color: var(--amber);
+  border: 1px solid var(--amber);
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-left: 4px;
+}
+
+/* Roster tables */
+.roster-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 6px 0 18px;
+  font-size: 0.85rem;
+}
+.roster-table th, .roster-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--panel-border);
+}
+.roster-table td.num, .roster-table th:last-child { text-align: right; }
+.roster-table.taxi-table td:last-child { color: var(--amber); }
+.roster-table.ir-table td:last-child { color: var(--muted); }
+
+.team-cap-summary {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-size: 0.85rem;
+}
+
+.rosters-grid { display: flex; flex-direction: column; gap: 10px; }
+.roster-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+}
+.roster-card summary { cursor: pointer; font-weight: 600; }
+
+/* Leaderboards */
+.leaderboard-grid {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+.lb-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--panel-border);
+}
+.lb-row:last-child { border-bottom: none; }
+.lb-rank {
+  width: 22px;
+  text-align: center;
+  color: var(--muted);
+  font-weight: 700;
+}
+.lb-main { flex: 1; display: flex; flex-direction: column; }
+.lb-player { font-weight: 600; }
+.lb-sub { font-size: 0.78rem; color: var(--muted); }
+.lb-value { font-weight: 700; color: var(--emerald); }
+
+/* Trade Machine */
+.trade-teams {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+@media (max-width: 700px) {
+  .trade-teams { grid-template-columns: 1fr; }
+}
+.trade-side {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+.trade-roster-list { margin-top: 10px; max-height: 360px; overflow-y: auto; }
+.trade-player-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--panel-border);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.trade-player-name { flex: 1; }
+.trade-player-salary { color: var(--muted); width: 44px; text-align: right; }
+.trade-retain { display: flex; align-items: center; gap: 4px; font-size: 0.78rem; color: var(--muted); }
+.trade-retain-input {
+  width: 52px;
+  background: #0d0f14;
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+.trade-summary { margin-top: 12px; }
+.trade-result {
+  background: #0d0f14;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 0.85rem;
+}
+.trade-result-nums {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-weight: 700;
+}
+.over-cap-text { color: var(--crimson); }
+.ok-cap-text { color: var(--emerald); }
+
+/* Rule Book */
+.rules-search {
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 999px;
+  margin-bottom: 16px;
+  font-size: 0.9rem;
+}
+.rule-section {
+  margin-bottom: 18px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+}
+.rule-section h3 { margin: 0 0 8px; font-size: 0.95rem; }
+.rule-list { margin: 0; padding-left: 18px; font-size: 0.85rem; line-height: 1.6; }
+.rule-list li { margin-bottom: 4px; }
+mark { background: var(--amber); color: #0d0f14; border-radius: 3px; padding: 0 2px; }
 
 .controls {
   display: flex;

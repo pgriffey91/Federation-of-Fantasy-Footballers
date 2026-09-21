@@ -15,4 +15,35 @@ window.LEAGUE_CONFIG = {
   // browser before refetching, in hours. Sleeper asks that this endpoint
   // not be called more than once a day.
   playerCacheHours: 24,
+
+  // League hard salary cap (per the rulebook: $500, all-in after the
+  // startup draft + in-season FAAB budget).
+  hardCap: 500,
+
+  // Trades can retain up to this much salary on the sending team per the
+  // rulebook's "you can receive up to $50 of cap space every year" rule.
+  maxRetainedSalary: 50,
+
+  // Your league's Google Sheet salary ledger. Sharing must be set to
+  // "Anyone with the link -> Viewer" for this to work (Share button in
+  // Google Sheets), since the site reads it live via Google's CSV export.
+  googleSheetId: "1qa67_YFLOFr2Ng6g56IdrzP3wQueUuZ1-ZCaeKsHG6s",
+
+  // The tab with the leaguewide Salary Cap / Dead Cap totals.
+  snapshotSheetName: "Salary Cap Snapshot",
+
+  // Maps each Sleeper roster_id to that team's tab name in the sheet above.
+  // Edit this if a team's sheet tab gets renamed or ownership changes.
+  sheetTabsByRosterId: {
+    "1": "Dwpurcell",
+    "2": "pgriffey91",
+    "3": "IrishSox15",
+    "4": "tklatka",
+    "5": "JoeFro",
+    "6": "BigBob847",
+    "7": "Rdoro24",
+    "8": "saellingsen1",
+    "9": "BrotherDan2",
+    "10": "AlexMira24",
+  },
 };

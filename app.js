@@ -1,7 +1,8 @@
-/* League Activity Feed
- * Pulls live add/drop/trade data from the Sleeper API and merges it with a
- * taxi-squad move log that a scheduled GitHub Action maintains in
- * data/taxi-log.json (Sleeper's API has no history endpoint for taxi moves).
+/* League Activity Feed + Salary Cap Site
+ * Combines live Sleeper API data (adds/drops/trades, rosters, users),
+ * a GitHub-Action-maintained taxi-squad log, and the league's Google Sheet
+ * salary ledger into one site: activity feed, cap health matrix, per-team
+ * roster pages, value leaderboards, a trade calculator, and rule book.
  */
 
 const CFG = window.LEAGUE_CONFIG;
@@ -9,11 +10,16 @@ const API = "https://api.sleeper.app/v1";
 const PAGE_SIZE = 40;
 
 const state = {
-  rosterMap: new Map(),   // roster_id -> { name, teamName, avatar, ownerId }
-  players: new Map(),     // player_id -> { name, pos, team }
-  events: [],             // all normalized events, sorted newest first
+  league: null,
+  rosterMap: new Map(), // roster_id -> { name, ownerDisplay, avatar, ownerId }
+  players: new Map(), // player_id -> { name, pos, team }
+  nameIndex: new Map(), // normalized player name -> player_id
+  events: [],
   filtered: [],
   shown: 0,
+  sheetByRoster: {}, // rosterId(string) -> { activeRoster, taxiSquad, ir, cap }
+  pointsByPlayer: new Map(), // player_id -> total season points (approx half-PPR)
+  trade: { teamA: null, teamB: null, retained: {} }, // retained: { "A:PlayerName": $, "B:PlayerName": $ }
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -26,6 +32,11 @@ async function fetchJSON(url) {
 
 function setStatus(msg) {
   $("#status-line").textContent = msg;
+}
+
+function money(n) {
+  const sign = n < 0 ? "-" : "";
+  return `${sign}$${Math.abs(Math.round(n))}`;
 }
 
 /* ---------- Players database (cached in localStorage) ---------- */
@@ -45,7 +56,7 @@ async function loadPlayers() {
       }
     }
   } catch (e) {
-    // localStorage full or unavailable — fall through to network fetch
+    // fall through to network
   }
 
   setStatus("Downloading player database from Sleeper (first load only, then cached)…");
@@ -56,16 +67,19 @@ async function loadPlayers() {
     localStorage.setItem(cacheKey, JSON.stringify(data));
     localStorage.setItem(cacheTsKey, String(Date.now()));
   } catch (e) {
-    // Player DB is large; if storage quota is exceeded just skip caching.
+    // quota exceeded — skip caching
   }
 }
 
 function applyPlayers(data) {
   state.players.clear();
+  state.nameIndex.clear();
   for (const [id, p] of Object.entries(data)) {
     if (!p) continue;
     const name = p.full_name || [p.first_name, p.last_name].filter(Boolean).join(" ") || `Player ${id}`;
     state.players.set(id, { name, pos: p.position || "", team: p.team || "FA" });
+    const norm = SheetData.normalizeName(name);
+    if (norm && !state.nameIndex.has(norm)) state.nameIndex.set(norm, id);
   }
 }
 
@@ -73,6 +87,10 @@ function playerLabel(id) {
   const p = state.players.get(String(id));
   if (!p) return `Player #${id}`;
   return p.pos ? `${p.name} (${p.pos})` : p.name;
+}
+
+function playerIdForName(name) {
+  return state.nameIndex.get(SheetData.normalizeName(name));
 }
 
 /* ---------- League / rosters / users ---------- */
@@ -84,6 +102,7 @@ async function loadLeagueShell() {
     fetchJSON(`${API}/league/${CFG.leagueId}/rosters`),
   ]);
 
+  state.league = league;
   const userMap = new Map(users.map((u) => [u.user_id, u]));
 
   state.rosterMap.clear();
@@ -95,37 +114,133 @@ async function loadLeagueShell() {
       ownerDisplay: u.display_name || teamName,
       avatar: u.avatar ? `https://sleepercdn.com/avatars/thumbs/${u.avatar}` : null,
       ownerId: r.owner_id,
+      taxiCount: (r.taxi || []).length,
     });
   }
 
   $("#site-title").textContent = CFG.siteName || league.name || "League Activity Feed";
-  $("#season-label").textContent = league.season ? `${league.season} season` : "";
   document.title = CFG.siteName || league.name || "League Activity Feed";
 
   populateTeamFilter();
+  renderHeaderStats(league);
   return league;
 }
 
 function populateTeamFilter() {
-  const select = $("#team-filter");
-  const existing = new Set(Array.from(select.options).map((o) => o.value));
   const teams = Array.from(state.rosterMap.entries())
     .map(([id, r]) => ({ id, name: r.name }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  for (const t of teams) {
-    const key = String(t.id);
-    if (existing.has(key)) continue;
-    const opt = document.createElement("option");
-    opt.value = key;
-    opt.textContent = t.name;
-    select.appendChild(opt);
+  for (const select of [$("#team-filter"), $("#myteam-select")]) {
+    if (!select) continue;
+    const existing = new Set(Array.from(select.options).map((o) => o.value));
+    for (const t of teams) {
+      const key = String(t.id);
+      if (existing.has(key)) continue;
+      const opt = document.createElement("option");
+      opt.value = key;
+      opt.textContent = t.name;
+      select.appendChild(opt);
+    }
   }
 }
 
 function teamName(rosterId) {
   const r = state.rosterMap.get(rosterId) || state.rosterMap.get(Number(rosterId));
   return r ? r.name : `Roster ${rosterId}`;
+}
+
+/* ---------- Header stats ---------- */
+
+function renderHeaderStats(league) {
+  $("#stat-cap").textContent = `$${CFG.hardCap}`;
+
+  const deadline = league.settings && league.settings.trade_deadline;
+  $("#stat-deadline").textContent = deadline ? `Week ${deadline}` : "—";
+
+  const leg = (league.settings && league.settings.leg) || 1;
+  const playoffStart = (league.settings && league.settings.playoff_week_start) || 15;
+  let phase = "—";
+  if (league.status === "complete") phase = "Season Complete";
+  else if (league.status === "pre_draft" || league.status === "drafting") phase = "Off-Season — Draft";
+  else if (league.status === "in_season") {
+    phase = leg >= playoffStart ? `Playoffs — Week ${leg}` : `In-Season — Week ${leg}`;
+  } else {
+    phase = "Off-Season";
+  }
+  $("#stat-phase").textContent = phase;
+}
+
+let lastSyncedAt = null;
+function markSynced() {
+  lastSyncedAt = Date.now();
+  updateSyncBadge();
+}
+function updateSyncBadge() {
+  const el = $("#sync-text");
+  if (!el) return;
+  if (!lastSyncedAt) {
+    el.textContent = "Loading…";
+    return;
+  }
+  const secs = Math.round((Date.now() - lastSyncedAt) / 1000);
+  if (secs < 5) el.textContent = "Sleeper synced just now";
+  else if (secs < 60) el.textContent = `Sleeper synced ${secs}s ago`;
+  else el.textContent = `Sleeper synced ${Math.round(secs / 60)}m ago`;
+}
+setInterval(updateSyncBadge, 15000);
+
+/* ---------- Cap Health Matrix ---------- */
+
+function renderCapMatrix() {
+  const container = $("#cap-matrix");
+  container.innerHTML = "";
+
+  const rosterIds = Object.keys(CFG.sheetTabsByRosterId);
+  const cards = rosterIds
+    .map((rid) => ({ rid, cap: state.sheetByRoster[rid] && state.sheetByRoster[rid].cap }))
+    .filter((x) => x.cap)
+    .sort((a, b) => b.cap.remainingCap - a.cap.remainingCap);
+
+  if (!cards.length) {
+    container.innerHTML = '<div class="empty-state">Salary data not available — check the Google Sheet is shared as "Anyone with the link".</div>';
+    return;
+  }
+
+  const taxiSlots = (state.league && state.league.settings && state.league.settings.taxi_slots) || 5;
+
+  for (const { rid, cap } of cards) {
+    const usedActive = cap.activeSalary + cap.irSalary;
+    const pct = (n) => Math.max(0, Math.min(100, (n / CFG.hardCap) * 100));
+    const over = cap.remainingCap < 0;
+    const r = state.rosterMap.get(Number(rid));
+    const taxiCount = r ? r.taxiCount : 0;
+
+    const card = document.createElement("div");
+    card.className = "cap-card";
+    card.innerHTML = `
+      <div class="cap-card-head">
+        <span class="cap-team-name">${teamName(Number(rid))}</span>
+        <span class="cap-badges">
+          <span class="badge taxi-badge">${taxiCount}/${taxiSlots} Taxi</span>
+          ${over
+            ? '<span class="badge over-cap-badge">⚠ OVER CAP</span>'
+            : '<span class="badge compliant-badge">✓ Compliant</span>'}
+        </span>
+      </div>
+      <div class="cap-bar">
+        <div class="cap-seg cap-seg-active" style="width:${pct(usedActive)}%" title="Active roster salary: ${money(usedActive)}"></div>
+        <div class="cap-seg cap-seg-dead" style="width:${pct(cap.deadCap)}%" title="Dead cap: ${money(cap.deadCap)}"></div>
+        <div class="cap-seg cap-seg-remaining" style="width:${pct(cap.remainingCap)}%" title="Remaining: ${money(cap.remainingCap)}"></div>
+      </div>
+      <div class="cap-legend">
+        <span><i class="dot dot-active"></i>Active ${money(usedActive)}</span>
+        <span><i class="dot dot-dead"></i>Dead ${money(cap.deadCap)}</span>
+        <span><i class="dot dot-remaining"></i>Open ${money(cap.remainingCap)}</span>
+      </div>
+    `;
+    container.appendChild(card);
+  }
 }
 
 /* ---------- Transactions (live from Sleeper) ---------- */
@@ -142,7 +257,6 @@ async function loadTransactions(maxWeek) {
       )
     );
     chunks.push(...results);
-    setStatus(`Loading transactions… week ${Math.min(i + CONCURRENCY, weeks.length)} / ${weeks.length}`);
   }
   const all = chunks.flat();
   const seen = new Set();
@@ -153,6 +267,26 @@ async function loadTransactions(maxWeek) {
     deduped.push(tx);
   }
   return deduped.filter((tx) => tx.status === "complete");
+}
+
+function findSheetSalaryForDrop(playerName, rosterId) {
+  // The dropping team's own "Dropped Players" dead-cap table is the
+  // authoritative source for what a dropped player's salary was. Fall back
+  // to that player still showing up on someone's active roster (e.g. the
+  // sheet hasn't been updated yet) as a secondary guess.
+  const norm = SheetData.normalizeName(playerName);
+  const own = state.sheetByRoster[rosterId];
+  if (own) {
+    const hit = own.deadCapPlayers.find((p) => SheetData.normalizeName(p.name) === norm);
+    if (hit) return hit.salary;
+  }
+  for (const rid of Object.keys(state.sheetByRoster)) {
+    const sheet = state.sheetByRoster[rid];
+    for (const p of sheet.activeRoster) {
+      if (SheetData.normalizeName(p.name) === norm) return p.salary;
+    }
+  }
+  return null;
 }
 
 function transactionsToEvents(transactions) {
@@ -166,11 +300,8 @@ function transactionsToEvents(transactions) {
       continue;
     }
 
-    // waiver / free_agent / commissioner add-drop moves
     const bid = tx.settings && typeof tx.settings.waiver_bid === "number" ? tx.settings.waiver_bid : null;
-    const rosterIds = tx.roster_ids && tx.roster_ids.length ? tx.roster_ids : Object.values(tx.adds || {}).concat(Object.values(tx.drops || {}));
 
-    // Adds
     if (tx.adds) {
       for (const [playerId, rosterId] of Object.entries(tx.adds)) {
         events.push({
@@ -180,11 +311,9 @@ function transactionsToEvents(transactions) {
           rosterIds: [rosterId],
           playerIds: [playerId],
           amount: bid,
-          txType: tx.type,
         });
       }
     }
-    // Drops
     if (tx.drops) {
       for (const [playerId, rosterId] of Object.entries(tx.drops)) {
         events.push({
@@ -194,7 +323,6 @@ function transactionsToEvents(transactions) {
           rosterIds: [rosterId],
           playerIds: [playerId],
           amount: null,
-          txType: tx.type,
         });
       }
     }
@@ -205,21 +333,25 @@ function transactionsToEvents(transactions) {
 
 function tradeToEvents(tx, created) {
   const adds = tx.adds || {};
-  const drops = tx.drops || {};
   const picks = tx.draft_picks || [];
+  const budgetMoves = tx.waiver_budget || [];
   const rosterIds = tx.roster_ids || [];
 
-  const gains = new Map(); // rosterId -> { players: [], picks: [] }
-  for (const id of rosterIds) gains.set(id, { players: [], picks: [] });
+  const gains = new Map();
+  for (const id of rosterIds) gains.set(id, { players: [], picks: [], cap: 0 });
 
   for (const [playerId, rosterId] of Object.entries(adds)) {
-    if (!gains.has(rosterId)) gains.set(rosterId, { players: [], picks: [] });
+    if (!gains.has(rosterId)) gains.set(rosterId, { players: [], picks: [], cap: 0 });
     gains.get(rosterId).players.push(playerId);
   }
   for (const pick of picks) {
     const toRoster = pick.owner_id;
-    if (!gains.has(toRoster)) gains.set(toRoster, { players: [], picks: [] });
+    if (!gains.has(toRoster)) gains.set(toRoster, { players: [], picks: [], cap: 0 });
     gains.get(toRoster).picks.push(pick);
+  }
+  for (const move of budgetMoves) {
+    if (!gains.has(move.receiver)) gains.set(move.receiver, { players: [], picks: [], cap: 0 });
+    gains.get(move.receiver).cap += move.amount;
   }
 
   return [
@@ -229,7 +361,6 @@ function tradeToEvents(tx, created) {
       date: created,
       rosterIds,
       gains: Array.from(gains.entries()),
-      txType: "trade",
     },
   ];
 }
@@ -241,19 +372,18 @@ function pickLabel(pick) {
   return `${pick.season} ${round}${suffix}-round pick (${originalTeam}'s)`;
 }
 
-/* ---------- Taxi log (from GitHub-Action-maintained JSON) ---------- */
+/* ---------- Taxi log ---------- */
 
 async function loadTaxiLog() {
   try {
     const log = await fetchJSON(`data/taxi-log.json?_=${Date.now()}`);
     return (Array.isArray(log) ? log : []).map((e) => ({
       id: e.id,
-      type: e.type, // "taxi_add" | "taxi_remove"
+      type: e.type,
       date: e.date,
       rosterIds: [e.roster_id],
       playerIds: [e.player_id],
       amount: null,
-      txType: "taxi",
     }));
   } catch (e) {
     console.warn("No taxi log available yet:", e);
@@ -261,12 +391,11 @@ async function loadTaxiLog() {
   }
 }
 
-/* ---------- Rendering ---------- */
+/* ---------- Feed rendering ---------- */
 
 function formatDate(ms) {
   if (!ms) return "";
-  const d = new Date(ms);
-  return d.toLocaleString(undefined, {
+  return new Date(ms).toLocaleString(undefined, {
     month: "short",
     day: "numeric",
     hour: "numeric",
@@ -276,25 +405,17 @@ function formatDate(ms) {
 
 function eventMatchesFilters(ev, { teamId, types, query }) {
   if (types.size && !types.has(ev.type)) return false;
-
-  if (teamId) {
-    const involved = ev.rosterIds.map(String);
-    if (!involved.includes(teamId)) return false;
-  }
-
+  if (teamId && !ev.rosterIds.map(String).includes(teamId)) return false;
   if (query) {
     const q = query.toLowerCase();
-    const names = (ev.playerIds || []).map((id) => playerLabel(id).toLowerCase());
     if (ev.type === "trade") {
-      const gainNames = ev.gains.flatMap(([, g]) =>
-        g.players.map((p) => playerLabel(p).toLowerCase())
-      );
+      const gainNames = ev.gains.flatMap(([, g]) => g.players.map((p) => playerLabel(p).toLowerCase()));
       if (!gainNames.some((n) => n.includes(q))) return false;
-    } else if (!names.some((n) => n.includes(q))) {
-      return false;
+    } else {
+      const names = (ev.playerIds || []).map((id) => playerLabel(id).toLowerCase());
+      if (!names.some((n) => n.includes(q))) return false;
     }
   }
-
   return true;
 }
 
@@ -308,41 +429,34 @@ function renderEventCard(ev) {
 
   const body = document.createElement("div");
   body.className = "event-body";
-
   const title = document.createElement("p");
   title.className = "event-title";
 
   if (ev.type === "trade") {
     const teams = ev.rosterIds.map((id) => teamName(id));
     const parts = ev.gains
-      .filter(([, g]) => g.players.length || g.picks.length)
+      .filter(([, g]) => g.players.length || g.picks.length || g.cap)
       .map(([rosterId, g]) => {
         const items = [
           ...g.players.map((p) => playerLabel(p)),
           ...g.picks.map((p) => pickLabel(p)),
         ];
+        if (g.cap) items.push(`<span class="amount">+${money(g.cap)}</span> cap space`);
         return `<span class="team">${teamName(rosterId)}</span> gets ${items.join(", ")}`;
       });
-    title.innerHTML =
-      `<span class="tag trade">Trade</span> ${teams.join(" ⇄ ")}<br>` + parts.join("<br>");
+    title.innerHTML = `<span class="tag trade">Trade</span> ${teams.join(" ⇄ ")}<br>` + parts.join("<br>");
   } else if (ev.type === "add") {
-    const amountHtml =
-      ev.amount !== null ? ` for <span class="amount">$${ev.amount}</span>` : "";
-    title.innerHTML = `<span class="tag add">Add</span> <span class="team">${teamName(
-      ev.rosterIds[0]
-    )}</span> added ${playerLabel(ev.playerIds[0])}${amountHtml}`;
+    const amountHtml = ev.amount !== null ? ` for <span class="amount">$${ev.amount}</span> FAAB` : "";
+    title.innerHTML = `<span class="tag add">Add</span> <span class="team">${teamName(ev.rosterIds[0])}</span> added ${playerLabel(ev.playerIds[0])}${amountHtml}`;
   } else if (ev.type === "drop") {
-    title.innerHTML = `<span class="tag drop">Drop</span> <span class="team">${teamName(
-      ev.rosterIds[0]
-    )}</span> dropped ${playerLabel(ev.playerIds[0])}`;
+    const p = state.players.get(String(ev.playerIds[0]));
+    const salary = p ? findSheetSalaryForDrop(p.name, ev.rosterIds[0]) : null;
+    const salaryHtml = salary !== null ? ` <span class="salary-tag">Salary: ${money(salary)}</span>` : "";
+    title.innerHTML = `<span class="tag drop">Drop</span> <span class="team">${teamName(ev.rosterIds[0])}</span> dropped ${playerLabel(ev.playerIds[0])}${salaryHtml}`;
   } else if (ev.type === "taxi_add") {
-    title.innerHTML = `<span class="tag taxi_add">Taxi</span> <span class="team">${teamName(
-      ev.rosterIds[0]
-    )}</span> moved ${playerLabel(ev.playerIds[0])} onto the taxi squad`;
+    title.innerHTML = `<span class="tag taxi_add">Taxi</span> <span class="team">${teamName(ev.rosterIds[0])}</span> moved ${playerLabel(ev.playerIds[0])} onto the taxi squad`;
   } else if (ev.type === "taxi_remove") {
-    title.innerHTML = `<span class="tag taxi_remove">Taxi</span> <span class="team">${teamName(
-      ev.rosterIds[0]
-    )}</span> moved ${playerLabel(ev.playerIds[0])} off the taxi squad`;
+    title.innerHTML = `<span class="tag taxi_remove">Taxi</span> <span class="team">${teamName(ev.rosterIds[0])}</span> moved ${playerLabel(ev.playerIds[0])} off the taxi squad`;
   }
 
   const meta = document.createElement("p");
@@ -357,9 +471,7 @@ function renderEventCard(ev) {
 
 function currentFilters() {
   const teamId = $("#team-filter").value;
-  const types = new Set(
-    Array.from(document.querySelectorAll(".checkboxes input:checked")).map((c) => c.value)
-  );
+  const types = new Set(Array.from(document.querySelectorAll(".checkboxes input:checked")).map((c) => c.value));
   const query = $("#search-box").value.trim();
   return { teamId, types, query };
 }
@@ -377,12 +489,335 @@ function renderMore() {
   const slice = state.filtered.slice(state.shown, state.shown + PAGE_SIZE);
   for (const ev of slice) feed.appendChild(renderEventCard(ev));
   state.shown += slice.length;
-
   if (state.filtered.length === 0) {
     feed.innerHTML = '<div class="empty-state">No activity matches these filters.</div>';
   }
-
   $("#load-more-wrap").hidden = state.shown >= state.filtered.length;
+}
+
+/* ---------- My Team / League Rosters ---------- */
+
+function rosterTableHTML(sheet) {
+  const section = (title, rows, cssClass) => {
+    if (!rows.length) return `<h4>${title}</h4><p class="muted-note">None</p>`;
+    const body = rows
+      .map((p) => `<tr><td>${p.name}</td><td>${p.pos}</td><td class="num">${money(p.salary)}</td></tr>`)
+      .join("");
+    return `<h4>${title}</h4><table class="roster-table ${cssClass || ""}"><thead><tr><th>Player</th><th>Pos</th><th>Salary</th></tr></thead><tbody>${body}</tbody></table>`;
+  };
+  return (
+    section("Active Roster", sheet.activeRoster) +
+    section("Taxi Squad (doesn't count against cap)", sheet.taxiSquad, "taxi-table") +
+    section("Injured Reserve", sheet.ir, "ir-table")
+  );
+}
+
+function renderMyTeamPage() {
+  const select = $("#myteam-select");
+  const body = $("#myteam-body");
+  const render = () => {
+    const rid = select.value;
+    const sheet = state.sheetByRoster[rid];
+    if (!sheet) {
+      body.innerHTML = '<div class="empty-state">No salary data for this team.</div>';
+      return;
+    }
+    const cap = sheet.cap;
+    body.innerHTML = `
+      <div class="team-cap-summary">
+        <span><strong>${money(cap.activeSalary + cap.irSalary)}</strong> active salary</span>
+        <span><strong>${money(cap.deadCap)}</strong> dead cap</span>
+        <span><strong>${money(cap.remainingCap)}</strong> remaining</span>
+        <span><strong>${money(cap.taxiSalary)}</strong> on taxi (not counted)</span>
+      </div>
+      ${rosterTableHTML(sheet)}
+    `;
+  };
+  select.addEventListener("change", render);
+  if (select.options.length) render();
+}
+
+function renderRostersPage() {
+  const container = $("#rosters-body");
+  container.innerHTML = "";
+  const rosterIds = Object.keys(CFG.sheetTabsByRosterId).sort(
+    (a, b) => (state.sheetByRoster[b]?.cap.remainingCap || 0) - (state.sheetByRoster[a]?.cap.remainingCap || 0)
+  );
+  for (const rid of rosterIds) {
+    const sheet = state.sheetByRoster[rid];
+    if (!sheet) continue;
+    const card = document.createElement("details");
+    card.className = "roster-card";
+    card.innerHTML = `
+      <summary>${teamName(Number(rid))} — <span class="muted-note">${money(sheet.cap.remainingCap)} remaining</span></summary>
+      ${rosterTableHTML(sheet)}
+    `;
+    container.appendChild(card);
+  }
+}
+
+/* ---------- Leaderboards ---------- */
+
+function allActiveRosterEntries() {
+  const out = [];
+  for (const rid of Object.keys(state.sheetByRoster)) {
+    const sheet = state.sheetByRoster[rid];
+    for (const p of sheet.activeRoster) {
+      out.push({ ...p, rosterId: Number(rid) });
+    }
+  }
+  return out;
+}
+
+function leaderboardRowHTML(rank, primary, secondary, valueLabel) {
+  return `
+    <div class="lb-row">
+      <span class="lb-rank">${rank}</span>
+      <span class="lb-main">
+        <span class="lb-player">${primary}</span>
+        <span class="lb-sub">${secondary}</span>
+      </span>
+      <span class="lb-value">${valueLabel}</span>
+    </div>
+  `;
+}
+
+function renderLeaderboards() {
+  const entries = allActiveRosterEntries().filter((p) => p.salary > 0);
+
+  // Best value: points per dollar
+  const valueRanked = entries
+    .map((p) => {
+      const pid = playerIdForName(p.name);
+      const pts = pid ? state.pointsByPlayer.get(pid) || 0 : 0;
+      return { ...p, pts, value: pts / p.salary };
+    })
+    .filter((p) => p.pts > 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 10);
+
+  $("#lb-value").innerHTML = valueRanked
+    .map((p, i) =>
+      leaderboardRowHTML(
+        i + 1,
+        `${p.name} (${p.pos})`,
+        `${teamName(p.rosterId)} · ${money(p.salary)} salary · ${p.pts.toFixed(1)} pts`,
+        `${p.value.toFixed(2)} pts/$`
+      )
+    )
+    .join("") || '<div class="empty-state">Not enough stats yet this season.</div>';
+
+  // Highest paid
+  const highest = [...entries].sort((a, b) => b.salary - a.salary).slice(0, 10);
+  $("#lb-highest").innerHTML = highest
+    .map((p, i) => leaderboardRowHTML(i + 1, `${p.name} (${p.pos})`, teamName(p.rosterId), money(p.salary)))
+    .join("");
+
+  // Dead cap wall
+  const deadCapRanked = Object.keys(state.sheetByRoster)
+    .map((rid) => ({ rid: Number(rid), deadCap: state.sheetByRoster[rid].cap.deadCap }))
+    .filter((x) => x.deadCap > 0)
+    .sort((a, b) => b.deadCap - a.deadCap);
+
+  $("#lb-deadcap").innerHTML =
+    deadCapRanked
+      .map((x, i) => leaderboardRowHTML(i + 1, teamName(x.rid), "Dead cap absorbed", money(x.deadCap)))
+      .join("") || '<div class="empty-state">No dead cap on any roster right now.</div>';
+}
+
+/* ---------- Trade Machine ---------- */
+
+function renderTradeSide(side) {
+  const container = $(`#trade-side-${side.toLowerCase()}`);
+  const rosterIds = Object.keys(CFG.sheetTabsByRosterId);
+
+  const teamOptions = rosterIds
+    .map((rid) => `<option value="${rid}">${teamName(Number(rid))}</option>`)
+    .join("");
+
+  container.innerHTML = `
+    <div class="control-group">
+      <label>Team ${side}</label>
+      <select class="trade-team-select" data-side="${side}">
+        <option value="">Choose a team…</option>
+        ${teamOptions}
+      </select>
+    </div>
+    <div class="trade-roster-list" data-side="${side}"></div>
+    <div class="trade-summary" data-side="${side}"></div>
+  `;
+
+  container.querySelector(".trade-team-select").addEventListener("change", (e) => {
+    state.trade[`team${side}`] = e.target.value || null;
+    renderTradeRosterList(side);
+    recomputeTrade();
+  });
+}
+
+function renderTradeRosterList(side) {
+  const rid = state.trade[`team${side}`];
+  const listEl = document.querySelector(`.trade-roster-list[data-side="${side}"]`);
+  if (!rid) {
+    listEl.innerHTML = "";
+    return;
+  }
+  const sheet = state.sheetByRoster[rid];
+  if (!sheet) {
+    listEl.innerHTML = '<p class="muted-note">No salary data for this team.</p>';
+    return;
+  }
+
+  listEl.innerHTML = sheet.activeRoster
+    .map((p) => {
+      const key = `${side}:${p.name}`;
+      const maxRetain = Math.min(CFG.maxRetainedSalary, p.salary);
+      return `
+        <label class="trade-player-row">
+          <input type="checkbox" class="trade-player-check" data-side="${side}" data-key="${key}" data-salary="${p.salary}">
+          <span class="trade-player-name">${p.name} (${p.pos})</span>
+          <span class="trade-player-salary">${money(p.salary)}</span>
+          <span class="trade-retain">
+            Retain $<input type="number" min="0" max="${maxRetain}" value="0" class="trade-retain-input" data-side="${side}" data-key="${key}" disabled>
+          </span>
+        </label>
+      `;
+    })
+    .join("");
+
+  listEl.querySelectorAll(".trade-player-check").forEach((cb) =>
+    cb.addEventListener("change", (e) => {
+      const key = e.target.dataset.key;
+      const retainInput = listEl.querySelector(`.trade-retain-input[data-key="${CSS.escape(key)}"]`);
+      retainInput.disabled = !e.target.checked;
+      if (!e.target.checked) {
+        delete state.trade.retained[key];
+        retainInput.value = 0;
+      }
+      recomputeTrade();
+    })
+  );
+  listEl.querySelectorAll(".trade-retain-input").forEach((inp) =>
+    inp.addEventListener("input", (e) => {
+      state.trade.retained[e.target.dataset.key] = Number(e.target.value) || 0;
+      recomputeTrade();
+    })
+  );
+}
+
+function recomputeTrade() {
+  const ridA = state.trade.teamA;
+  const ridB = state.trade.teamB;
+  const summaryA = document.querySelector('.trade-summary[data-side="A"]');
+  const summaryB = document.querySelector('.trade-summary[data-side="B"]');
+  if (!ridA || !ridB || !summaryA || !summaryB) {
+    if (summaryA) summaryA.innerHTML = "";
+    if (summaryB) summaryB.innerHTML = "";
+    return;
+  }
+
+  const netMove = (side) => {
+    const checks = document.querySelectorAll(`.trade-player-check[data-side="${side}"]:checked`);
+    let total = 0;
+    checks.forEach((cb) => {
+      const salary = Number(cb.dataset.salary);
+      const retained = state.trade.retained[cb.dataset.key] || 0;
+      total += salary - retained;
+    });
+    return total;
+  };
+
+  const moveFromA = netMove("A"); // cap that leaves A's books, lands on B's
+  const moveFromB = netMove("B");
+
+  const capA = state.sheetByRoster[ridA].cap;
+  const capB = state.sheetByRoster[ridB].cap;
+
+  const newRemainingA = capA.remainingCap + moveFromA - moveFromB;
+  const newRemainingB = capB.remainingCap + moveFromB - moveFromA;
+
+  const summaryHTML = (teamLabel, current, next) => `
+    <div class="trade-result">
+      <div>${teamLabel} remaining cap</div>
+      <div class="trade-result-nums">
+        <span>${money(current)}</span> → <span class="${next < 0 ? "over-cap-text" : "ok-cap-text"}">${money(next)}</span>
+        ${next < 0 ? '<span class="badge over-cap-badge">⚠ OVER CAP</span>' : ""}
+      </div>
+    </div>
+  `;
+
+  summaryA.innerHTML = summaryHTML(teamName(Number(ridA)), capA.remainingCap, newRemainingA);
+  summaryB.innerHTML = summaryHTML(teamName(Number(ridB)), capB.remainingCap, newRemainingB);
+}
+
+function initTradeMachine() {
+  renderTradeSide("A");
+  renderTradeSide("B");
+}
+
+/* ---------- Draft & FA page ---------- */
+
+const ROOKIE_SCHEDULE = [
+  ["1.01", "$30"], ["1.02–1.03", "$26"], ["1.04–1.06", "$23"], ["1.07–1.10", "$20"],
+  ["2.01–2.03", "$15"], ["2.04–2.07", "$12"], ["2.08–2.10", "$9"],
+  ["3.01–3.05", "$6"], ["3.06–3.10", "$5"],
+  ["Round 4 (all picks)", "$2"],
+];
+
+function renderDraftPage() {
+  $("#rookie-schedule").innerHTML = `
+    <table class="roster-table">
+      <thead><tr><th>Pick</th><th>Salary</th></tr></thead>
+      <tbody>${ROOKIE_SCHEDULE.map(([pick, sal]) => `<tr><td>${pick}</td><td class="num">${sal}</td></tr>`).join("")}</tbody>
+    </table>
+  `;
+
+  const faSection = RULEBOOK_SECTIONS.find((s) => s.heading === "In-Season Free Agency");
+  const offSection = RULEBOOK_SECTIONS.find((s) => s.heading === "Off-Season Free Agency");
+  const bullets = [...(faSection ? faSection.bullets : []), ...(offSection ? offSection.bullets : [])];
+  $("#fa-rules").innerHTML = bullets.map((b) => `<li>${b}</li>`).join("");
+}
+
+/* ---------- Rule Book page ---------- */
+
+function renderRulesPage(query) {
+  const q = (query || "").trim().toLowerCase();
+  const container = $("#rules-body");
+  const highlight = (text) => {
+    if (!q) return text;
+    const idx = text.toLowerCase().indexOf(q);
+    if (idx === -1) return text;
+    return text.slice(0, idx) + "<mark>" + text.slice(idx, idx + q.length) + "</mark>" + text.slice(idx + q.length);
+  };
+
+  const sections = RULEBOOK_SECTIONS.map((s) => {
+    const headingMatches = s.heading.toLowerCase().includes(q);
+    const bullets = s.bullets.filter((b) => !q || headingMatches || b.toLowerCase().includes(q));
+    return { ...s, bullets };
+  }).filter((s) => !q || s.bullets.length);
+
+  container.innerHTML = sections
+    .map(
+      (s) => `
+        <div class="rule-section">
+          <h3>${highlight(s.heading)}</h3>
+          <ul class="rule-list">${s.bullets.map((b) => `<li>${highlight(b)}</li>`).join("")}</ul>
+        </div>
+      `
+    )
+    .join("") || '<div class="empty-state">No matching rules.</div>';
+}
+
+/* ---------- Nav ---------- */
+
+function initNav() {
+  document.querySelectorAll(".nav-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      document.querySelectorAll(".page").forEach((p) => (p.hidden = true));
+      $(`#page-${btn.dataset.page}`).hidden = false;
+    });
+  });
 }
 
 /* ---------- Bootstrap ---------- */
@@ -392,18 +827,40 @@ async function init() {
     setStatus("Loading league info…");
     const [league] = await Promise.all([loadLeagueShell(), loadPlayers()]);
 
-    setStatus("Loading transactions…");
+    setStatus("Loading transactions, taxi log, and salary sheet…");
     const maxWeek = CFG.maxWeek || (league.settings && league.settings.leg) || 18;
-    const [transactions, taxiEvents] = await Promise.all([
+    const currentWeek = Math.max(1, Math.min(maxWeek, (league.settings && league.settings.leg) || maxWeek));
+
+    const [transactions, taxiEvents, sheetByRoster, pointsByPlayer] = await Promise.all([
       loadTransactions(maxWeek),
       loadTaxiLog(),
+      SheetData.loadAll(CFG.googleSheetId, CFG.sheetTabsByRosterId, CFG.snapshotSheetName).catch((err) => {
+        console.error("Sheet load failed:", err);
+        return {};
+      }),
+      StatsData.loadSeasonPoints(league.season, currentWeek).catch((err) => {
+        console.error("Stats load failed:", err);
+        return new Map();
+      }),
     ]);
+
+    state.sheetByRoster = sheetByRoster;
+    state.pointsByPlayer = pointsByPlayer;
 
     const liveEvents = transactionsToEvents(transactions);
     state.events = [...liveEvents, ...taxiEvents].sort((a, b) => (b.date || 0) - (a.date || 0));
 
+    markSynced();
     setStatus(`Loaded ${state.events.length} events.`);
+
     applyFilters();
+    renderCapMatrix();
+    renderMyTeamPage();
+    renderRostersPage();
+    renderLeaderboards();
+    initTradeMachine();
+    renderDraftPage();
+    renderRulesPage("");
   } catch (err) {
     console.error(err);
     setStatus(`Failed to load league data: ${err.message}`);
@@ -411,12 +868,11 @@ async function init() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  initNav();
   init();
 
   $("#team-filter").addEventListener("change", applyFilters);
-  document
-    .querySelectorAll(".checkboxes input")
-    .forEach((c) => c.addEventListener("change", applyFilters));
+  document.querySelectorAll(".checkboxes input").forEach((c) => c.addEventListener("change", applyFilters));
   $("#search-box").addEventListener("input", () => {
     clearTimeout(window.__searchDebounce);
     window.__searchDebounce = setTimeout(applyFilters, 150);
@@ -426,4 +882,5 @@ document.addEventListener("DOMContentLoaded", () => {
     localStorage.removeItem("sleeper_players_nfl_v1_ts");
     init();
   });
+  $("#rules-search").addEventListener("input", (e) => renderRulesPage(e.target.value));
 });
