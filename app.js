@@ -215,6 +215,7 @@ function renderCapMatrix() {
     const over = cap.remainingCap < 0;
     const r = state.rosterMap.get(Number(rid));
     const taxiCount = r ? r.taxiCount : 0;
+    const failed = state.sheetByRoster[rid] && state.sheetByRoster[rid].loadFailed;
 
     const card = document.createElement("div");
     card.className = "cap-card";
@@ -222,6 +223,7 @@ function renderCapMatrix() {
       <div class="cap-card-head">
         <span class="cap-team-name">${teamName(Number(rid))}</span>
         <span class="cap-badges">
+          ${failed ? '<span class="badge over-cap-badge">⚠ Roster data failed to load</span>' : ""}
           <span class="badge taxi-badge">${taxiCount}/${taxiSlots} Taxi</span>
           ${over
             ? '<span class="badge over-cap-badge">⚠ OVER CAP</span>'
@@ -234,7 +236,7 @@ function renderCapMatrix() {
         <div class="cap-seg cap-seg-remaining" style="width:${pct(cap.remainingCap)}%" title="Remaining: ${money(cap.remainingCap)}"></div>
       </div>
       <div class="cap-legend">
-        <span><i class="dot dot-active"></i>Active ${money(usedActive)}</span>
+        <span><i class="dot dot-active"></i>Active ${money(usedActive)}${failed ? " (unavailable)" : ""}</span>
         <span><i class="dot dot-dead"></i>Dead ${money(cap.deadCap)}</span>
         <span><i class="dot dot-remaining"></i>Open ${money(cap.remainingCap)}</span>
       </div>

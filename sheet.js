@@ -69,9 +69,13 @@ const SheetData = (() => {
   }
 
   async function fetchRows(sheetId, tabName) {
-    const res = await fetch(GVIZ_URL(sheetId, tabName));
+    // Cache-bust: Google's CSV export and/or the browser can otherwise
+    // serve a stale copy of one tab indefinitely.
+    const url = `${GVIZ_URL(sheetId, tabName)}&_=${Date.now()}`;
+    const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) throw new Error(`Sheet tab "${tabName}" -> HTTP ${res.status}`);
     const text = await res.text();
+    if (!text || !text.trim()) throw new Error(`Sheet tab "${tabName}" returned empty`);
     return parseCSV(text);
   }
 
@@ -177,17 +181,23 @@ const SheetData = (() => {
   async function loadAll(sheetId, sheetTabsByRosterId, snapshotTabName) {
     const rosterIds = Object.keys(sheetTabsByRosterId);
 
-    const [snapshotRows, ...teamRowsList] = await Promise.all([
-      fetchRows(sheetId, snapshotTabName),
-      ...rosterIds.map((rid) => fetchRows(sheetId, sheetTabsByRosterId[rid])),
-    ]);
+    const snapshotRows = await fetchRows(sheetId, snapshotTabName);
+    const teamResults = await Promise.allSettled(
+      rosterIds.map((rid) => fetchRows(sheetId, sheetTabsByRosterId[rid]))
+    );
 
     const snapshot = parseSnapshot(snapshotRows);
     const byRoster = {};
 
     rosterIds.forEach((rid, idx) => {
       const tabName = sheetTabsByRosterId[rid];
-      const parsed = parseTeamSheet(teamRowsList[idx]);
+      const result = teamResults[idx];
+      if (result.status === "rejected") {
+        console.error(`Sheet tab "${tabName}" (roster ${rid}) failed to load:`, result.reason);
+      }
+      const parsed = result.status === "fulfilled"
+        ? parseTeamSheet(result.value)
+        : { activeRoster: [], taxiSquad: [], ir: [], deadCapPlayers: [], totals: { activeRosterSalary: 0, taxiSalary: 0, irSalary: 0 }, loadFailed: true };
       const snap = snapshot[tabName] || { remainingCap: 0, deadCap: 0 };
       byRoster[rid] = {
         ...parsed,
