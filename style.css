@@ -154,6 +154,97 @@ main {
 }
 .muted-note { color: var(--muted); font-size: 0.85rem; }
 
+/* Standings */
+.standings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.standings-row {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.standings-row.expanded { border-color: var(--accent); }
+.standings-row-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  text-align: left;
+}
+.standings-seed {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #0d0f14;
+  border: 1px solid var(--panel-border);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+.standings-row:nth-child(-n+4) .standings-seed {
+  color: var(--bg);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.standings-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  flex: none;
+  object-fit: cover;
+  background: #0d0f14;
+  border: 1px solid var(--panel-border);
+}
+.standings-avatar-blank { display: inline-block; }
+.standings-team-name {
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.standings-record {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 48px;
+  text-align: right;
+}
+.standings-points {
+  color: var(--accent);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-width: 78px;
+  text-align: right;
+}
+.standings-caret {
+  color: var(--muted);
+  transition: transform 0.15s ease;
+  flex: none;
+}
+.standings-row.expanded .standings-caret { transform: rotate(180deg); }
+.standings-detail {
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--panel-border);
+}
+.standings-detail .cap-card {
+  border: none;
+  padding: 12px 0 0;
+}
+
 /* Cap Health Matrix */
 .cap-matrix {
   display: grid;
