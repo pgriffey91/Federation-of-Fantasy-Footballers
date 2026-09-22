@@ -155,53 +155,87 @@ main {
 .muted-note { color: var(--muted); font-size: 0.85rem; }
 
 /* Standings */
-.standings-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.standings-row {
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-.standings-row.expanded { border-color: var(--accent); }
-.standings-row-head {
+.standings-table {
   width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  background: transparent;
-  border: none;
-  color: var(--text);
-  padding: 10px 14px;
-  cursor: pointer;
-  font-size: 0.9rem;
-  text-align: left;
+  border-collapse: separate;
+  border-spacing: 0 6px;
+  font-size: 0.85rem;
 }
-.standings-seed {
-  width: 22px;
-  height: 22px;
-  flex: none;
+.standings-table thead th {
+  text-align: left;
+  padding: 0 10px 6px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+.standings-table thead th.num { text-align: right; }
+.standings-table tbody tr.standings-row {
+  background: var(--panel);
+  cursor: pointer;
+}
+.standings-table tbody tr.standings-row:hover { background: #1b1f2b; }
+.standings-table tbody tr.standings-row.expanded { outline: 1px solid var(--accent); }
+.standings-table tbody td {
+  padding: 10px;
+  border-top: 1px solid var(--panel-border);
+  border-bottom: 1px solid var(--panel-border);
+  white-space: nowrap;
+}
+.standings-table tbody tr.standings-row td:first-child {
+  border-left: 1px solid var(--panel-border);
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+.standings-table tbody tr.standings-row td:last-child {
+  border-right: 1px solid var(--panel-border);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.standings-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.standings-rank-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 9px 3px 3px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-border);
+  white-space: nowrap;
+}
+.standings-seed-num {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  background: #0d0f14;
-  border: 1px solid var(--panel-border);
-  font-size: 0.75rem;
+  font-size: 0.68rem;
   font-weight: 700;
-  color: var(--muted);
+  background: #0d0f14;
 }
-.standings-row:nth-child(-n+4) .standings-seed {
-  color: var(--bg);
-  background: var(--accent);
-  border-color: var(--accent);
+.rk-bye { color: var(--accent); border-color: var(--accent); }
+.rk-bye .standings-seed-num { color: var(--bg); background: var(--accent); }
+.rk-playoff { color: var(--emerald); border-color: var(--emerald); }
+.rk-playoff .standings-seed-num { color: var(--bg); background: var(--emerald); }
+.rk-wildcard { color: var(--amber); border-color: var(--amber); }
+.rk-wildcard .standings-seed-num { color: var(--bg); background: var(--amber); }
+.rk-out { color: var(--muted); }
+.rk-out .standings-seed-num { color: var(--muted); }
+
+.standings-team-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
 }
 .standings-avatar {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   flex: none;
   object-fit: cover;
@@ -209,40 +243,43 @@ main {
   border: 1px solid var(--panel-border);
 }
 .standings-avatar-blank { display: inline-block; }
-.standings-team-name {
-  font-weight: 600;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.standings-record {
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-  min-width: 48px;
-  text-align: right;
-}
-.standings-points {
-  color: var(--accent);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  min-width: 78px;
-  text-align: right;
-}
+.standings-team-name { font-weight: 600; }
+
+.streak-win { color: var(--emerald); font-weight: 600; }
+.streak-loss { color: var(--crimson); font-weight: 600; }
+.streak-tie { color: var(--amber); font-weight: 600; }
+
+.standings-caret-cell { width: 20px; }
 .standings-caret {
   color: var(--muted);
+  display: inline-block;
   transition: transform 0.15s ease;
-  flex: none;
 }
 .standings-row.expanded .standings-caret { transform: rotate(180deg); }
-.standings-detail {
-  padding: 0 14px 14px;
-  border-top: 1px solid var(--panel-border);
+
+.standings-detail-row td {
+  border: none;
+  padding: 0;
+  background: transparent;
 }
-.standings-detail .cap-card {
+.standings-detail-inner {
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  margin: -6px 0 6px;
+  padding: 0 14px 14px;
+}
+.standings-detail-inner .cap-card {
   border: none;
   padding: 12px 0 0;
+}
+
+/* Small screens: let the wide standings table scroll horizontally rather
+   than crushing every column. */
+@media (max-width: 720px) {
+  #standings { overflow-x: auto; }
+  .standings-table { min-width: 720px; }
 }
 
 /* Cap Health Matrix */
