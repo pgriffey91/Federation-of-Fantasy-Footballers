@@ -390,18 +390,16 @@ async function loadStandingsExtras(currentWeek) {
 
 /* ---------- Standings ---------- */
 
-// Seed 1 = 1st-round bye, seed 2 = 2nd-round bye, 3-4 = playoffs, 5-6 =
-// wild card (still seeded by points among the non-top-4 teams), 7-10 show
-// how many points they're back of 6th place (points scored) instead of a
-// plain label.
-function rankMeta(seed, ranked) {
+// Seeds 1-4 are set by record (1 = 1st-round bye, 2 = 2nd-round bye, 3-4 =
+// playoffs). Seeds 5-6 are set by points scored among the remaining teams
+// (wild card). Seeds 7-10 miss the playoffs entirely and are marked for the
+// following year's draft lottery instead.
+function rankMeta(seed) {
   if (seed === 1) return { label: "1st Bye", cls: "rk-bye" };
   if (seed === 2) return { label: "2nd Bye", cls: "rk-bye" };
   if (seed <= 4) return { label: "Playoffs", cls: "rk-playoff" };
   if (seed <= 6) return { label: "Points WC", cls: "rk-wildcard" };
-  const sixth = ranked[5];
-  const gap = sixth ? Math.max(0, sixth.pointsFor - ranked[seed - 1].pointsFor) : 0;
-  return { label: `${gap.toFixed(1)} back`, cls: "rk-out" };
+  return { label: "Draft Lottery", cls: "rk-out" };
 }
 
 function streakClass(streak) {
@@ -442,7 +440,7 @@ function renderStandings() {
   const rows = ranked
     .map((t, idx) => {
       const seed = idx + 1;
-      const meta = rankMeta(seed, ranked);
+      const meta = rankMeta(seed);
       const record = `${t.wins}-${t.losses}${t.ties ? `-${t.ties}` : ""}`;
       const streak = extra.streakByRoster.get(t.rid) || "—";
       const waiver = t.waiverPosition ? `#${t.waiverPosition}` : "—";
@@ -504,6 +502,7 @@ function renderStandings() {
             <span class="week-pill">Week ${week}</span>
           </div>
           <p class="standings-subtitle">${CFG.siteName || "League"} • ${ranked.length} Teams • Hard Cap $${CFG.hardCap}</p>
+          <p class="standings-seed-key">Seeds 1–4 by record · 5–6 by points scored · 7–10 draft lottery</p>
         </div>
         <div class="cap-legend-inline">
           <span><i class="dot dot-active"></i>Active Cap</span>
