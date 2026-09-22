@@ -390,12 +390,15 @@ async function loadStandingsExtras(currentWeek) {
 
 /* ---------- Standings ---------- */
 
-// Seed 1-2 = 1st-round bye, 3-4 = playoffs, 5-6 = wild card, 7-10 show how
-// many points they're back of 6th place (points scored) instead of a label.
+// Seed 1 = 1st-round bye, seed 2 = 2nd-round bye, 3-4 = playoffs, 5-6 =
+// wild card (still seeded by points among the non-top-4 teams), 7-10 show
+// how many points they're back of 6th place (points scored) instead of a
+// plain label.
 function rankMeta(seed, ranked) {
-  if (seed <= 2) return { label: "1st-Rd Bye", cls: "rk-bye" };
+  if (seed === 1) return { label: "1st Bye", cls: "rk-bye" };
+  if (seed === 2) return { label: "2nd Bye", cls: "rk-bye" };
   if (seed <= 4) return { label: "Playoffs", cls: "rk-playoff" };
-  if (seed <= 6) return { label: "Wild Card", cls: "rk-wildcard" };
+  if (seed <= 6) return { label: "Points WC", cls: "rk-wildcard" };
   const sixth = ranked[5];
   const gap = sixth ? Math.max(0, sixth.pointsFor - ranked[seed - 1].pointsFor) : 0;
   return { label: `${gap.toFixed(1)} back`, cls: "rk-out" };
@@ -434,6 +437,7 @@ function renderStandings() {
 
   const ranked = [...top4, ...rest];
   const extra = state.standingsExtra;
+  const week = (state.league && state.league.settings && state.league.settings.leg) || 1;
 
   const rows = ranked
     .map((t, idx) => {
@@ -445,16 +449,35 @@ function renderStandings() {
       const maxPF = extra.maxPFByRoster.get(t.rid) || 0;
       const ridStr = String(t.rid);
 
+      const cap = state.sheetByRoster[ridStr] && state.sheetByRoster[ridStr].cap;
+      const capBar = cap
+        ? (() => {
+            const usedActive = cap.activeSalary + cap.irSalary;
+            const pct = (n) => Math.max(0, Math.min(100, (n / CFG.hardCap) * 100));
+            const over = cap.remainingCap < 0;
+            return `
+              <div class="cap-mini-bar" title="Active ${money(usedActive)} · Dead ${money(cap.deadCap)} · Open ${money(cap.remainingCap)}">
+                <div class="cap-mini-seg cap-seg-active" style="width:${pct(usedActive)}%"></div>
+                <div class="cap-mini-seg cap-seg-dead" style="width:${pct(cap.deadCap)}%"></div>
+                <div class="cap-mini-seg cap-seg-remaining" style="width:${pct(cap.remainingCap)}%"></div>
+              </div>
+              <span class="cap-avail ${over ? "over-cap-text" : ""}">${money(cap.remainingCap)}</span>
+            `;
+          })()
+        : '<span class="muted-note">—</span>';
+
       return `
         <tr class="standings-row" data-rid="${ridStr}">
-          <td>
-            <span class="standings-rank-badge ${meta.cls}">
-              <span class="standings-seed-num">${seed}</span> ${meta.label}
-            </span>
-          </td>
+          <td><span class="standings-rank-sq ${meta.cls}">${seed}</span></td>
           <td class="standings-team-cell">
             ${t.avatar ? `<img class="standings-avatar" src="${t.avatar}" alt="">` : '<span class="standings-avatar standings-avatar-blank"></span>'}
-            <span class="standings-team-name">${t.name}</span>
+            <span class="standings-team-block">
+              <span class="standings-team-line">
+                <span class="standings-team-name">${t.name}</span>
+                <span class="standings-badge-pill ${meta.cls}">${meta.label}</span>
+              </span>
+              <span class="standings-owner">${t.ownerDisplay}</span>
+            </span>
           </td>
           <td>${record}</td>
           <td class="${streakClass(streak)}">${streak}</td>
@@ -462,32 +485,52 @@ function renderStandings() {
           <td class="num">${t.pointsFor.toFixed(1)}</td>
           <td class="num">${t.pointsAgainst.toFixed(1)}</td>
           <td class="num">${maxPF.toFixed(1)}</td>
+          <td class="standings-cap-cell">${capBar}</td>
           <td class="standings-caret-cell"><span class="standings-caret">▾</span></td>
         </tr>
         <tr class="standings-detail-row" data-detail-for="${ridStr}" hidden>
-          <td colspan="9"><div class="standings-detail-inner"></div></td>
+          <td colspan="10"><div class="standings-detail-inner"></div></td>
         </tr>
       `;
     })
     .join("");
 
   container.innerHTML = `
-    <table class="standings-table">
-      <thead>
-        <tr>
-          <th>Rank</th>
-          <th>Team</th>
-          <th>Record</th>
-          <th>Streak</th>
-          <th>Waiver Pri.</th>
-          <th class="num">PF</th>
-          <th class="num">PA</th>
-          <th class="num">Max PF</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
+    <div class="standings-card">
+      <div class="standings-card-head">
+        <div>
+          <div class="standings-title-row">
+            <h2 class="standings-title">League Standings</h2>
+            <span class="week-pill">Week ${week}</span>
+          </div>
+          <p class="standings-subtitle">${CFG.siteName || "League"} • ${ranked.length} Teams • Hard Cap $${CFG.hardCap}</p>
+        </div>
+        <div class="cap-legend-inline">
+          <span><i class="dot dot-active"></i>Active Cap</span>
+          <span><i class="dot dot-dead"></i>Dead Cap</span>
+          <span><i class="dot dot-remaining"></i>Space</span>
+        </div>
+      </div>
+      <div class="standings-table-wrap">
+        <table class="standings-table">
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Franchise</th>
+              <th>W-L</th>
+              <th>Streak</th>
+              <th>Waiver Pri.</th>
+              <th class="num">Points For</th>
+              <th class="num">Points Against</th>
+              <th class="num">Max PF</th>
+              <th>Cap Breakdown ($${CFG.hardCap})</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>
   `;
 
   container.querySelectorAll(".standings-row").forEach((row) => {
