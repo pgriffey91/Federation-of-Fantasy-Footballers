@@ -20,6 +20,8 @@ const state = {
   sheetByRoster: {}, // rosterId(string) -> { activeRoster, taxiSquad, ir, cap }
   pointsByPlayer: new Map(), // player_id -> total season points (approx half-PPR)
   trade: { teamA: null, teamB: null, retained: {} }, // retained: { "A:PlayerName": $, "B:PlayerName": $ }
+  rosterPositions: [], // league's starting-lineup slot list (e.g. ["QB","RB","RB","WR","WR","TE","FLEX","DEF","K","BN",...])
+  standingsExtra: { streakByRoster: new Map(), maxPFByRoster: new Map() },
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -77,7 +79,8 @@ function applyPlayers(data) {
   for (const [id, p] of Object.entries(data)) {
     if (!p) continue;
     const name = p.full_name || [p.first_name, p.last_name].filter(Boolean).join(" ") || `Player ${id}`;
-    state.players.set(id, { name, pos: p.position || "", team: p.team || "FA" });
+    const fantasyPositions = (p.fantasy_positions && p.fantasy_positions.length) ? p.fantasy_positions : (p.position ? [p.position] : []);
+    state.players.set(id, { name, pos: p.position || "", team: p.team || "FA", fantasyPositions });
     const norm = SheetData.normalizeName(name);
     if (norm && !state.nameIndex.has(norm)) state.nameIndex.set(norm, id);
   }
@@ -121,8 +124,11 @@ async function loadLeagueShell() {
       ties: s.ties || 0,
       pointsFor: (s.fpts || 0) + (s.fpts_decimal || 0) / 100,
       pointsAgainst: (s.fpts_against || 0) + (s.fpts_against_decimal || 0) / 100,
+      waiverPosition: s.waiver_position || null,
     });
   }
+
+  state.rosterPositions = league.roster_positions || [];
 
   $("#site-title").textContent = CFG.siteName || league.name || "League Activity Feed";
   document.title = CFG.siteName || league.name || "League Activity Feed";
@@ -258,7 +264,149 @@ function renderCapMatrix() {
   container.innerHTML = cards.map(({ rid }) => buildCapCardHTML(rid)).join("");
 }
 
+/* ---------- Standings: weekly matchups (streak + Max PF) ---------- */
+
+// Which real positions can fill a given roster slot. Anything not covered
+// here (QB, RB, WR, TE, K, DEF, single IDP slots, ...) requires an exact
+// fantasy_positions match with the slot name itself.
+function eligiblePositionsForSlot(slot) {
+  switch (slot) {
+    case "FLEX": return ["RB", "WR", "TE"];
+    case "SUPER_FLEX": return ["QB", "RB", "WR", "TE"];
+    case "WRRB_FLEX": return ["WR", "RB"];
+    case "REC_FLEX":
+    case "WRTE_FLEX": return ["WR", "TE"];
+    case "RB_FLEX": return ["RB", "WR"];
+    case "IDP_FLEX": return ["DL", "LB", "DB"];
+    default: return [slot];
+  }
+}
+
+const NON_STARTING_SLOTS = new Set(["BN", "IR", "TAXI"]);
+
+// Greedy best-lineup solver: fills the most position-restrictive slots
+// first (so a naturally-scarce single-position slot doesn't get starved by
+// a wide-open FLEX/SUPER_FLEX grabbing the best player first), each time
+// taking the highest-scoring still-eligible, still-unassigned player.
+function computeOptimalLineupPoints(playerIds, playersPoints, rosterPositions) {
+  const startSlots = (rosterPositions || []).filter((p) => !NON_STARTING_SLOTS.has(p));
+  if (!startSlots.length || !playerIds || !playerIds.length) return 0;
+
+  const slotsSorted = startSlots
+    .map((slot, i) => ({ slot, i, elig: eligiblePositionsForSlot(slot) }))
+    .sort((a, b) => a.elig.length - b.elig.length || a.i - b.i);
+
+  const available = new Set(playerIds);
+  let total = 0;
+
+  for (const { elig } of slotsSorted) {
+    let bestId = null;
+    let bestPts = -Infinity;
+    for (const pid of available) {
+      const p = state.players.get(String(pid));
+      const positions = p && p.fantasyPositions && p.fantasyPositions.length ? p.fantasyPositions : p ? [p.pos] : [];
+      if (!positions.some((pos) => elig.includes(pos))) continue;
+      const pts = playersPoints[pid] != null ? playersPoints[pid] : 0;
+      if (pts > bestPts) {
+        bestPts = pts;
+        bestId = pid;
+      }
+    }
+    if (bestId != null) {
+      available.delete(bestId);
+      total += bestPts;
+    }
+  }
+  return total;
+}
+
+// Pulls every played week's matchups to derive each team's current win/loss
+// streak and season-long "Max PF" (the points they'd have if their optimal
+// lineup — best scorer at every slot, bench included — had started every
+// week). Skips weeks that haven't been played yet (all-zero points).
+async function loadStandingsExtras(currentWeek) {
+  const weeks = [];
+  for (let w = 1; w <= currentWeek; w++) weeks.push(w);
+
+  const results = await Promise.allSettled(
+    weeks.map((w) => fetchJSON(`${API}/league/${CFG.leagueId}/matchups/${w}`).then((data) => ({ week: w, data })))
+  );
+
+  const weeklyByRoster = new Map(); // roster_id -> [{ week, result }]
+  const maxPFByRoster = new Map(); // roster_id -> total optimal points
+
+  for (const r of results) {
+    if (r.status !== "fulfilled") continue;
+    const { week, data } = r.value;
+    if (!Array.isArray(data) || !data.length) continue;
+    const totalPoints = data.reduce((s, e) => s + (e.points || 0), 0);
+    if (totalPoints <= 0) continue; // week hasn't been played yet
+
+    const byMatchup = new Map();
+    for (const e of data) {
+      if (!byMatchup.has(e.matchup_id)) byMatchup.set(e.matchup_id, []);
+      byMatchup.get(e.matchup_id).push(e);
+    }
+
+    for (const e of data) {
+      const rid = e.roster_id;
+      const maxPts = computeOptimalLineupPoints(e.players || [], e.players_points || {}, state.rosterPositions);
+      maxPFByRoster.set(rid, (maxPFByRoster.get(rid) || 0) + maxPts);
+
+      const group = byMatchup.get(e.matchup_id) || [];
+      let result = null;
+      if (group.length === 2) {
+        const [a, b] = group;
+        if (a.points === b.points) result = "T";
+        else result = (a.points > b.points ? a.roster_id : b.roster_id) === rid ? "W" : "L";
+      }
+      if (result) {
+        if (!weeklyByRoster.has(rid)) weeklyByRoster.set(rid, []);
+        weeklyByRoster.get(rid).push({ week, result });
+      }
+    }
+  }
+
+  const streakByRoster = new Map();
+  for (const [rid, weeksArr] of weeklyByRoster.entries()) {
+    weeksArr.sort((a, b) => a.week - b.week);
+    let streak = 0;
+    let type = null;
+    for (let i = weeksArr.length - 1; i >= 0; i--) {
+      if (type === null) {
+        type = weeksArr[i].result;
+        streak = 1;
+      } else if (weeksArr[i].result === type) {
+        streak++;
+      } else {
+        break;
+      }
+    }
+    streakByRoster.set(rid, type ? `${type}${streak}` : "—");
+  }
+
+  return { streakByRoster, maxPFByRoster };
+}
+
 /* ---------- Standings ---------- */
+
+// Seed 1-2 = 1st-round bye, 3-4 = playoffs, 5-6 = wild card, 7-10 show how
+// many points they're back of 6th place (points scored) instead of a label.
+function rankMeta(seed, ranked) {
+  if (seed <= 2) return { label: "1st-Rd Bye", cls: "rk-bye" };
+  if (seed <= 4) return { label: "Playoffs", cls: "rk-playoff" };
+  if (seed <= 6) return { label: "Wild Card", cls: "rk-wildcard" };
+  const sixth = ranked[5];
+  const gap = sixth ? Math.max(0, sixth.pointsFor - ranked[seed - 1].pointsFor) : 0;
+  return { label: `${gap.toFixed(1)} back`, cls: "rk-out" };
+}
+
+function streakClass(streak) {
+  if (streak.startsWith("W")) return "streak-win";
+  if (streak.startsWith("L")) return "streak-loss";
+  if (streak.startsWith("T")) return "streak-tie";
+  return "";
+}
 
 function renderStandings() {
   const container = $("#standings");
@@ -285,45 +433,80 @@ function renderStandings() {
   const rest = teams.filter((t) => !top4Ids.has(t.rid)).sort((a, b) => b.pointsFor - a.pointsFor);
 
   const ranked = [...top4, ...rest];
+  const extra = state.standingsExtra;
 
-  container.innerHTML = ranked
+  const rows = ranked
     .map((t, idx) => {
       const seed = idx + 1;
+      const meta = rankMeta(seed, ranked);
       const record = `${t.wins}-${t.losses}${t.ties ? `-${t.ties}` : ""}`;
+      const streak = extra.streakByRoster.get(t.rid) || "—";
+      const waiver = t.waiverPosition ? `#${t.waiverPosition}` : "—";
+      const maxPF = extra.maxPFByRoster.get(t.rid) || 0;
+      const ridStr = String(t.rid);
+
       return `
-        <div class="standings-row" data-rid="${t.rid}">
-          <button class="standings-row-head" type="button" aria-expanded="false">
-            <span class="standings-seed">${seed}</span>
+        <tr class="standings-row" data-rid="${ridStr}">
+          <td>
+            <span class="standings-rank-badge ${meta.cls}">
+              <span class="standings-seed-num">${seed}</span> ${meta.label}
+            </span>
+          </td>
+          <td class="standings-team-cell">
             ${t.avatar ? `<img class="standings-avatar" src="${t.avatar}" alt="">` : '<span class="standings-avatar standings-avatar-blank"></span>'}
             <span class="standings-team-name">${t.name}</span>
-            <span class="standings-record">${record}</span>
-            <span class="standings-points">${t.pointsFor.toFixed(1)} PF</span>
-            <span class="standings-caret">▾</span>
-          </button>
-          <div class="standings-detail" hidden></div>
-        </div>
+          </td>
+          <td>${record}</td>
+          <td class="${streakClass(streak)}">${streak}</td>
+          <td>${waiver}</td>
+          <td class="num">${t.pointsFor.toFixed(1)}</td>
+          <td class="num">${t.pointsAgainst.toFixed(1)}</td>
+          <td class="num">${maxPF.toFixed(1)}</td>
+          <td class="standings-caret-cell"><span class="standings-caret">▾</span></td>
+        </tr>
+        <tr class="standings-detail-row" data-detail-for="${ridStr}" hidden>
+          <td colspan="9"><div class="standings-detail-inner"></div></td>
+        </tr>
       `;
     })
     .join("");
 
-  container.querySelectorAll(".standings-row-head").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const row = btn.closest(".standings-row");
-      const detail = row.querySelector(".standings-detail");
-      const expanded = btn.getAttribute("aria-expanded") === "true";
+  container.innerHTML = `
+    <table class="standings-table">
+      <thead>
+        <tr>
+          <th>Rank</th>
+          <th>Team</th>
+          <th>Record</th>
+          <th>Streak</th>
+          <th>Waiver Pri.</th>
+          <th class="num">PF</th>
+          <th class="num">PA</th>
+          <th class="num">Max PF</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+
+  container.querySelectorAll(".standings-row").forEach((row) => {
+    row.addEventListener("click", () => {
+      const rid = row.dataset.rid;
+      const detailRow = container.querySelector(`.standings-detail-row[data-detail-for="${rid}"]`);
+      const inner = detailRow.querySelector(".standings-detail-inner");
+      const expanded = row.classList.contains("expanded");
       if (expanded) {
-        detail.hidden = true;
-        btn.setAttribute("aria-expanded", "false");
         row.classList.remove("expanded");
+        detailRow.hidden = true;
         return;
       }
-      if (!detail.dataset.filled) {
-        detail.innerHTML = buildCapCardHTML(row.dataset.rid);
-        detail.dataset.filled = "1";
+      if (!inner.dataset.filled) {
+        inner.innerHTML = buildCapCardHTML(rid);
+        inner.dataset.filled = "1";
       }
-      detail.hidden = false;
-      btn.setAttribute("aria-expanded", "true");
       row.classList.add("expanded");
+      detailRow.hidden = false;
     });
   });
 }
@@ -916,7 +1099,7 @@ async function init() {
     const maxWeek = CFG.maxWeek || (league.settings && league.settings.leg) || 18;
     const currentWeek = Math.max(1, Math.min(maxWeek, (league.settings && league.settings.leg) || maxWeek));
 
-    const [transactions, taxiEvents, sheetByRoster, pointsByPlayer] = await Promise.all([
+    const [transactions, taxiEvents, sheetByRoster, pointsByPlayer, standingsExtra] = await Promise.all([
       loadTransactions(maxWeek),
       loadTaxiLog(),
       SheetData.loadAll(CFG.googleSheetId, CFG.sheetTabsByRosterId, CFG.snapshotSheetName).catch((err) => {
@@ -927,10 +1110,15 @@ async function init() {
         console.error("Stats load failed:", err);
         return new Map();
       }),
+      loadStandingsExtras(currentWeek).catch((err) => {
+        console.error("Standings extras (streak/Max PF) failed:", err);
+        return { streakByRoster: new Map(), maxPFByRoster: new Map() };
+      }),
     ]);
 
     state.sheetByRoster = sheetByRoster;
     state.pointsByPlayer = pointsByPlayer;
+    state.standingsExtra = standingsExtra;
 
     const liveEvents = transactionsToEvents(transactions);
     state.events = [...liveEvents, ...taxiEvents].sort((a, b) => (b.date || 0) - (a.date || 0));
