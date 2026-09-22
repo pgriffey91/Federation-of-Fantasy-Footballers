@@ -109,12 +109,18 @@ async function loadLeagueShell() {
   for (const r of rosters) {
     const u = userMap.get(r.owner_id) || {};
     const teamName = (u.metadata && u.metadata.team_name) || u.display_name || `Roster ${r.roster_id}`;
+    const s = r.settings || {};
     state.rosterMap.set(r.roster_id, {
       name: teamName,
       ownerDisplay: u.display_name || teamName,
       avatar: u.avatar ? `https://sleepercdn.com/avatars/thumbs/${u.avatar}` : null,
       ownerId: r.owner_id,
       taxiCount: (r.taxi || []).length,
+      wins: s.wins || 0,
+      losses: s.losses || 0,
+      ties: s.ties || 0,
+      pointsFor: (s.fpts || 0) + (s.fpts_decimal || 0) / 100,
+      pointsAgainst: (s.fpts_against || 0) + (s.fpts_against_decimal || 0) / 100,
     });
   }
 
@@ -192,34 +198,24 @@ setInterval(updateSyncBadge, 15000);
 
 /* ---------- Cap Health Matrix ---------- */
 
-function renderCapMatrix() {
-  const container = $("#cap-matrix");
-  container.innerHTML = "";
-
-  const rosterIds = Object.keys(CFG.sheetTabsByRosterId);
-  const cards = rosterIds
-    .map((rid) => ({ rid, cap: state.sheetByRoster[rid] && state.sheetByRoster[rid].cap }))
-    .filter((x) => x.cap)
-    .sort((a, b) => b.cap.remainingCap - a.cap.remainingCap);
-
-  if (!cards.length) {
-    container.innerHTML = '<div class="empty-state">Salary data not available — check the Google Sheet is shared as "Anyone with the link".</div>';
-    return;
+// Builds a single team's cap-health card as an HTML string. Shared by the
+// full matrix (Cap Health page) and the expandable Standings rows on Home.
+function buildCapCardHTML(rid) {
+  const cap = state.sheetByRoster[rid] && state.sheetByRoster[rid].cap;
+  if (!cap) {
+    return '<div class="empty-state">Salary data not available — check the Google Sheet is shared as "Anyone with the link".</div>';
   }
 
   const taxiSlots = (state.league && state.league.settings && state.league.settings.taxi_slots) || 5;
+  const usedActive = cap.activeSalary + cap.irSalary;
+  const pct = (n) => Math.max(0, Math.min(100, (n / CFG.hardCap) * 100));
+  const over = cap.remainingCap < 0;
+  const r = state.rosterMap.get(Number(rid));
+  const taxiCount = r ? r.taxiCount : 0;
+  const failed = state.sheetByRoster[rid] && state.sheetByRoster[rid].loadFailed;
 
-  for (const { rid, cap } of cards) {
-    const usedActive = cap.activeSalary + cap.irSalary;
-    const pct = (n) => Math.max(0, Math.min(100, (n / CFG.hardCap) * 100));
-    const over = cap.remainingCap < 0;
-    const r = state.rosterMap.get(Number(rid));
-    const taxiCount = r ? r.taxiCount : 0;
-    const failed = state.sheetByRoster[rid] && state.sheetByRoster[rid].loadFailed;
-
-    const card = document.createElement("div");
-    card.className = "cap-card";
-    card.innerHTML = `
+  return `
+    <div class="cap-card">
       <div class="cap-card-head">
         <span class="cap-team-name">${teamName(Number(rid))}</span>
         <span class="cap-badges">
@@ -240,9 +236,96 @@ function renderCapMatrix() {
         <span><i class="dot dot-dead"></i>Dead ${money(cap.deadCap)}</span>
         <span><i class="dot dot-remaining"></i>Open ${money(cap.remainingCap)}</span>
       </div>
-    `;
-    container.appendChild(card);
+    </div>
+  `;
+}
+
+function renderCapMatrix() {
+  const container = $("#cap-matrix");
+  container.innerHTML = "";
+
+  const rosterIds = Object.keys(CFG.sheetTabsByRosterId);
+  const cards = rosterIds
+    .map((rid) => ({ rid, cap: state.sheetByRoster[rid] && state.sheetByRoster[rid].cap }))
+    .filter((x) => x.cap)
+    .sort((a, b) => b.cap.remainingCap - a.cap.remainingCap);
+
+  if (!cards.length) {
+    container.innerHTML = '<div class="empty-state">Salary data not available — check the Google Sheet is shared as "Anyone with the link".</div>';
+    return;
   }
+
+  container.innerHTML = cards.map(({ rid }) => buildCapCardHTML(rid)).join("");
+}
+
+/* ---------- Standings ---------- */
+
+function renderStandings() {
+  const container = $("#standings");
+  if (!container) return;
+
+  const rosterIds = Array.from(state.rosterMap.keys());
+  if (!rosterIds.length) {
+    container.innerHTML = '<div class="empty-state">Standings not available.</div>';
+    return;
+  }
+
+  const teams = rosterIds.map((rid) => ({ rid, ...state.rosterMap.get(rid) }));
+
+  // Seeds 1-4: sorted by record (wins desc, then losses asc, then points
+  // scored as the tiebreaker). Seeds 5-10: sorted purely by points scored,
+  // regardless of record, per league convention.
+  const byRecord = [...teams].sort((a, b) => {
+    if (b.wins !== a.wins) return b.wins - a.wins;
+    if (a.losses !== b.losses) return a.losses - b.losses;
+    return b.pointsFor - a.pointsFor;
+  });
+  const top4 = byRecord.slice(0, 4);
+  const top4Ids = new Set(top4.map((t) => t.rid));
+  const rest = teams.filter((t) => !top4Ids.has(t.rid)).sort((a, b) => b.pointsFor - a.pointsFor);
+
+  const ranked = [...top4, ...rest];
+
+  container.innerHTML = ranked
+    .map((t, idx) => {
+      const seed = idx + 1;
+      const record = `${t.wins}-${t.losses}${t.ties ? `-${t.ties}` : ""}`;
+      return `
+        <div class="standings-row" data-rid="${t.rid}">
+          <button class="standings-row-head" type="button" aria-expanded="false">
+            <span class="standings-seed">${seed}</span>
+            ${t.avatar ? `<img class="standings-avatar" src="${t.avatar}" alt="">` : '<span class="standings-avatar standings-avatar-blank"></span>'}
+            <span class="standings-team-name">${t.name}</span>
+            <span class="standings-record">${record}</span>
+            <span class="standings-points">${t.pointsFor.toFixed(1)} PF</span>
+            <span class="standings-caret">▾</span>
+          </button>
+          <div class="standings-detail" hidden></div>
+        </div>
+      `;
+    })
+    .join("");
+
+  container.querySelectorAll(".standings-row-head").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const row = btn.closest(".standings-row");
+      const detail = row.querySelector(".standings-detail");
+      const expanded = btn.getAttribute("aria-expanded") === "true";
+      if (expanded) {
+        detail.hidden = true;
+        btn.setAttribute("aria-expanded", "false");
+        row.classList.remove("expanded");
+        return;
+      }
+      if (!detail.dataset.filled) {
+        detail.innerHTML = buildCapCardHTML(row.dataset.rid);
+        detail.dataset.filled = "1";
+      }
+      detail.hidden = false;
+      btn.setAttribute("aria-expanded", "true");
+      row.classList.add("expanded");
+    });
+  });
 }
 
 /* ---------- Transactions (live from Sleeper) ---------- */
@@ -856,6 +939,7 @@ async function init() {
     setStatus(`Loaded ${state.events.length} events.`);
 
     applyFilters();
+    renderStandings();
     renderCapMatrix();
     renderMyTeamPage();
     renderRostersPage();
