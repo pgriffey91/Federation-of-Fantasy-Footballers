@@ -392,14 +392,17 @@ async function loadStandingsExtras(currentWeek) {
 
 // Seeds 1-4 are set by record (1 = 1st-round bye, 2 = 2nd-round bye, 3-4 =
 // playoffs). Seeds 5-6 are set by points scored among the remaining teams
-// (wild card). Seeds 7-10 miss the playoffs entirely and are marked for the
-// following year's draft lottery instead.
-function rankMeta(seed) {
+// (wild card). Seeds 7-10 miss the playoffs (headed for the following
+// year's draft lottery) and show how many points they're back of 6th place
+// instead of a plain label.
+function rankMeta(seed, ranked) {
   if (seed === 1) return { label: "1st Bye", cls: "rk-bye" };
   if (seed === 2) return { label: "2nd Bye", cls: "rk-bye" };
   if (seed <= 4) return { label: "Playoffs", cls: "rk-playoff" };
   if (seed <= 6) return { label: "Points WC", cls: "rk-wildcard" };
-  return { label: "Draft Lottery", cls: "rk-out" };
+  const sixth = ranked[5];
+  const gap = sixth ? Math.max(0, sixth.pointsFor - ranked[seed - 1].pointsFor) : 0;
+  return { label: `${gap.toFixed(2)} back`, cls: "rk-out" };
 }
 
 function streakClass(streak) {
@@ -440,7 +443,7 @@ function renderStandings() {
   const rows = ranked
     .map((t, idx) => {
       const seed = idx + 1;
-      const meta = rankMeta(seed);
+      const meta = rankMeta(seed, ranked);
       const record = `${t.wins}-${t.losses}${t.ties ? `-${t.ties}` : ""}`;
       const streak = extra.streakByRoster.get(t.rid) || "—";
       const waiver = t.waiverPosition ? `#${t.waiverPosition}` : "—";
