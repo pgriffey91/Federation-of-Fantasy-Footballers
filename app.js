@@ -482,9 +482,9 @@ function renderStandings() {
           <td>${record}</td>
           <td class="${streakClass(streak)}">${streak}</td>
           <td>${waiver}</td>
-          <td class="num">${t.pointsFor.toFixed(1)}</td>
-          <td class="num">${t.pointsAgainst.toFixed(1)}</td>
-          <td class="num">${maxPF.toFixed(1)}</td>
+          <td class="num">${t.pointsFor.toFixed(2)}</td>
+          <td class="num">${t.pointsAgainst.toFixed(2)}</td>
+          <td class="num">${maxPF.toFixed(2)}</td>
           <td class="standings-cap-cell">${capBar}</td>
           <td class="standings-caret-cell"><span class="standings-caret">▾</span></td>
         </tr>
