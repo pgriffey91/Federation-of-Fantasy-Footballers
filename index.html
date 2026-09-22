@@ -26,6 +26,7 @@
       </div>
       <nav class="main-nav" id="main-nav">
         <button class="nav-btn active" data-page="home">Home</button>
+        <button class="nav-btn" data-page="caphealth">Cap Health</button>
         <button class="nav-btn" data-page="myteam">My Team</button>
         <button class="nav-btn" data-page="rosters">League Rosters</button>
         <button class="nav-btn" data-page="leaderboards">Leaderboards</button>
@@ -41,8 +42,9 @@
 
     <!-- HOME -->
     <section id="page-home" class="page">
-      <h2 class="page-heading">Team Cap Health</h2>
-      <div id="cap-matrix" class="cap-matrix"></div>
+      <h2 class="page-heading">Standings</h2>
+      <p class="page-sub">Seeds 1–4 by record, 5–10 by points scored. Click a team to see its cap health.</p>
+      <div id="standings" class="standings-list"></div>
 
       <h2 class="page-heading">Recent Activity</h2>
       <section class="controls">
@@ -68,6 +70,12 @@
       <div id="load-more-wrap" class="load-more-wrap" hidden>
         <button id="load-more-btn">Load more</button>
       </div>
+    </section>
+
+    <!-- CAP HEALTH -->
+    <section id="page-caphealth" class="page" hidden>
+      <h2 class="page-heading">Team Cap Health</h2>
+      <div id="cap-matrix" class="cap-matrix"></div>
     </section>
 
     <!-- MY TEAM -->
