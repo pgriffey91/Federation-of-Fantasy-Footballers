@@ -254,6 +254,7 @@ function renderCapMatrix() {
   const cards = rosterIds
     .map((rid) => ({ rid, cap: state.sheetByRoster[rid] && state.sheetByRoster[rid].cap }))
     .filter((x) => x.cap)
+    // Most cap space first, least cap space (or over cap) at the bottom.
     .sort((a, b) => b.cap.remainingCap - a.cap.remainingCap);
 
   if (!cards.length) {
@@ -261,7 +262,102 @@ function renderCapMatrix() {
     return;
   }
 
-  container.innerHTML = cards.map(({ rid }) => buildCapCardHTML(rid)).join("");
+  const taxiSlots = (state.league && state.league.settings && state.league.settings.taxi_slots) || 5;
+  const numTeams = cards.length;
+
+  let totalDead = 0;
+  let totalOpen = 0;
+  let taxiUsedTotal = 0;
+  for (const { rid, cap } of cards) {
+    totalDead += cap.deadCap;
+    totalOpen += cap.remainingCap;
+    const r = state.rosterMap.get(Number(rid));
+    taxiUsedTotal += r ? r.taxiCount : 0;
+  }
+  const avgOpen = totalOpen / numTeams;
+  const avgUsed = CFG.hardCap - avgOpen;
+  const taxiSlotsTotal = taxiSlots * numTeams;
+  const taxiPct = taxiSlotsTotal ? Math.round((taxiUsedTotal / taxiSlotsTotal) * 100) : 0;
+
+  const statsHTML = `
+    <div class="cap-hub-stats">
+      <div class="cap-hub-stat">
+        <div class="cap-hub-stat-label">Hard Cap</div>
+        <div class="cap-hub-stat-value">${money(CFG.hardCap)}</div>
+        <div class="cap-hub-stat-sub">Per Team</div>
+      </div>
+      <div class="cap-hub-stat">
+        <div class="cap-hub-stat-label">League Avg Cap</div>
+        <div class="cap-hub-stat-value">${money(avgUsed)}</div>
+        <div class="cap-hub-stat-sub accent">${money(avgOpen)} Avg Open</div>
+      </div>
+      <div class="cap-hub-stat">
+        <div class="cap-hub-stat-label">Total Dead Cap</div>
+        <div class="cap-hub-stat-value">${money(totalDead)}</div>
+        <div class="cap-hub-stat-sub">Across ${numTeams} Teams</div>
+      </div>
+      <div class="cap-hub-stat">
+        <div class="cap-hub-stat-label">Taxi Spots</div>
+        <div class="cap-hub-stat-value">${taxiUsedTotal} / ${taxiSlotsTotal}</div>
+        <div class="cap-hub-stat-sub accent">${taxiPct}% Filled</div>
+      </div>
+    </div>
+  `;
+
+  const rowsHTML = cards
+    .map(({ rid, cap }, idx) => {
+      const r = state.rosterMap.get(Number(rid)) || {};
+      const usedActive = cap.activeSalary + cap.irSalary;
+      const pct = (n) => Math.max(0, Math.min(100, (n / CFG.hardCap) * 100));
+      const over = cap.remainingCap < 0;
+      const taxiCount = r.taxiCount || 0;
+      const failed = state.sheetByRoster[rid] && state.sheetByRoster[rid].loadFailed;
+      const usedPct = Math.round(((usedActive + cap.deadCap) / CFG.hardCap) * 100);
+      const record = r.wins != null ? `${r.wins}-${r.losses}${r.ties ? `-${r.ties}` : ""}` : "";
+      const pf = r.pointsFor != null ? `${r.pointsFor.toFixed(1)} PF` : "";
+
+      return `
+        <div class="cap-hub-row">
+          <div class="cap-hub-row-top">
+            <span class="cap-hub-rank">${idx + 1}</span>
+            <span class="cap-hub-team-block">
+              <span class="cap-hub-team-name">${teamName(Number(rid))}</span>
+              <span class="cap-hub-owner">${r.ownerDisplay || ""}</span>
+            </span>
+            <span class="cap-hub-record">${[record, pf].filter(Boolean).join(" | ")}</span>
+            <span class="cap-hub-badges">
+              ${failed ? '<span class="badge over-cap-badge">⚠ Data failed</span>' : ""}
+              <span class="badge taxi-badge">${taxiCount}/${taxiSlots} Taxi</span>
+              ${over
+                ? '<span class="badge over-cap-badge">⚠ OVER CAP</span>'
+                : '<span class="badge compliant-badge">✓ Compliant</span>'}
+            </span>
+          </div>
+          <div class="cap-bar">
+            <div class="cap-seg cap-seg-active" style="width:${pct(usedActive)}%" title="Active: ${money(usedActive)}"></div>
+            <div class="cap-seg cap-seg-dead" style="width:${pct(cap.deadCap)}%" title="Dead: ${money(cap.deadCap)}"></div>
+            <div class="cap-seg cap-seg-remaining" style="width:${pct(cap.remainingCap)}%" title="Open: ${money(cap.remainingCap)}"></div>
+          </div>
+          <div class="cap-hub-row-bottom">
+            <span class="cap-hub-legend"><i class="dot dot-active"></i>Active ${money(usedActive)}</span>
+            <span class="cap-hub-legend"><i class="dot dot-dead"></i>Dead ${money(cap.deadCap)}</span>
+            <span class="cap-hub-legend ${over ? "over-cap-text" : ""}"><i class="dot dot-remaining"></i>Open ${money(cap.remainingCap)}</span>
+            <span class="cap-hub-used-pct">${usedPct}% Used</span>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+
+  container.innerHTML = `
+    <div class="cap-hub-card">
+      <div class="cap-hub-eyebrow">${CFG.siteName || "League"}</div>
+      <h2 class="cap-hub-title">Salary Cap &amp; Roster Hub</h2>
+      ${statsHTML}
+      <h3 class="cap-hub-subhead">Franchise Cap Breakdowns</h3>
+      <div class="cap-hub-list">${rowsHTML}</div>
+    </div>
+  `;
 }
 
 /* ---------- Standings: weekly matchups (streak + Max PF) ---------- */
