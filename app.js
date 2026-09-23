@@ -357,6 +357,60 @@ function renderCapMatrix() {
       <h3 class="cap-hub-subhead">Franchise Cap Breakdowns</h3>
       <div class="cap-hub-list">${rowsHTML}</div>
     </div>
+    ${buildGraveyardHTML(cards, totalDead)}
+  `;
+}
+
+const EPITAPHS = [
+  "Cut down before their prime.",
+  "Gone, but the bill remains.",
+  "A contract that wouldn't die.",
+  "Waived. Not forgotten. Still billed.",
+  "Rest in cap space.",
+  "Here lies value, long since departed.",
+  "Dropped, but never truly gone.",
+  "Paid in full. Played in none.",
+  "May its cap hit rest in peace.",
+  "Benched by the Grim Waiver.",
+];
+
+// A tombstone per dropped player still costing someone cap space — the
+// morbidly fun face on what's otherwise just a "dead cap" number.
+function buildGraveyardHTML(cards, totalDead) {
+  const plots = [];
+  for (const { rid } of cards) {
+    const entry = state.sheetByRoster[rid];
+    if (!entry || !entry.deadCapPlayers) continue;
+    for (const p of entry.deadCapPlayers) {
+      if (p.salary > 0) plots.push({ name: p.name, salary: p.salary, rid });
+    }
+  }
+  if (!plots.length) return "";
+
+  plots.sort((a, b) => b.salary - a.salary);
+
+  const stonesHTML = plots
+    .map((p, i) => {
+      const epitaph = EPITAPHS[i % EPITAPHS.length];
+      return `
+        <div class="tombstone">
+          <div class="tombstone-skull">💀</div>
+          <div class="tombstone-rip">R.I.P.</div>
+          <div class="tombstone-name">${p.name}</div>
+          <div class="tombstone-salary">${money(p.salary)}</div>
+          <div class="tombstone-team">Buried by ${teamName(Number(p.rid))}</div>
+          <div class="tombstone-epitaph">"${epitaph}"</div>
+        </div>
+      `;
+    })
+    .join("");
+
+  return `
+    <div class="cap-hub-card graveyard-card">
+      <h2 class="cap-hub-title">⚰️ Cap Graveyard</h2>
+      <p class="cap-hub-subhead graveyard-sub">${money(totalDead)} in salary buried across the league — ${plots.length} fallen contract${plots.length === 1 ? "" : "s"}</p>
+      <div class="graveyard-grid">${stonesHTML}</div>
+    </div>
   `;
 }
 
