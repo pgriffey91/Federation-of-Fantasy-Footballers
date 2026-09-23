@@ -445,6 +445,45 @@ main {
   .cap-hub-row-top { gap: 8px; }
   .cap-hub-record { order: 3; width: 100%; }
 }
+
+/* Cap Graveyard */
+.graveyard-card { margin-top: 24px; }
+.graveyard-sub { text-transform: none; letter-spacing: normal; font-size: 0.82rem; color: var(--muted); }
+.graveyard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 20px 16px;
+  margin-top: 6px;
+}
+.tombstone {
+  background: linear-gradient(180deg, #1b1f2b 0%, #14171f 100%);
+  border: 1px solid var(--panel-border);
+  border-bottom: 3px solid var(--crimson);
+  border-radius: 70px 70px 8px 8px;
+  padding: 26px 14px 16px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.tombstone-skull { font-size: 1.3rem; margin-bottom: 2px; }
+.tombstone-rip {
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  font-weight: 700;
+}
+.tombstone-name { font-weight: 700; font-size: 0.88rem; margin-top: 2px; }
+.tombstone-salary { color: var(--crimson); font-weight: 700; font-size: 1rem; }
+.tombstone-team { font-size: 0.72rem; color: var(--muted); }
+.tombstone-epitaph {
+  font-size: 0.7rem;
+  font-style: italic;
+  color: var(--muted);
+  margin-top: 6px;
+  line-height: 1.3;
+}
 .cap-card {
   background: var(--panel);
   border: 1px solid var(--panel-border);
