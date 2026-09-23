@@ -337,11 +337,113 @@ main {
   padding: 12px 0 0;
 }
 
-/* Cap Health Matrix */
+/* Cap Health Matrix (used by the Standings expand-row cap card) */
 .cap-matrix {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 14px;
+}
+
+/* Salary Cap & Roster Hub (Cap Health page) */
+.cap-hub-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 22px 24px;
+}
+.cap-hub-eyebrow {
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.cap-hub-title { font-size: 1.5rem; margin: 4px 0 20px; }
+
+.cap-hub-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 26px;
+}
+.cap-hub-stat {
+  background: #0d0f14;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.cap-hub-stat-label {
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+.cap-hub-stat-value { font-size: 1.4rem; font-weight: 700; }
+.cap-hub-stat-sub { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
+.cap-hub-stat-sub.accent { color: var(--emerald); }
+
+.cap-hub-subhead {
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+
+.cap-hub-list { display: flex; flex-direction: column; gap: 10px; }
+.cap-hub-row {
+  background: #0d0f14;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.cap-hub-row-top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.cap-hub-rank {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 0.9rem;
+  width: 22px;
+  flex: none;
+}
+.cap-hub-team-block {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-right: auto;
+}
+.cap-hub-team-name { font-weight: 700; }
+.cap-hub-owner { font-size: 0.75rem; color: var(--muted); }
+.cap-hub-record {
+  color: var(--text);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.cap-hub-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.cap-hub-row-bottom {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 0.78rem;
+}
+.cap-hub-legend { color: var(--muted); display: flex; align-items: center; }
+.cap-hub-legend .dot { margin-right: 5px; }
+.cap-hub-used-pct { margin-left: auto; color: var(--muted); }
+
+@media (max-width: 720px) {
+  .cap-hub-card { padding: 16px; }
+  .cap-hub-row-top { gap: 8px; }
+  .cap-hub-record { order: 3; width: 100%; }
 }
 .cap-card {
   background: var(--panel);
