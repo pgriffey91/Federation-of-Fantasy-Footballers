@@ -143,7 +143,7 @@ function populateTeamFilter() {
     .map(([id, r]) => ({ id, name: r.name }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  for (const select of [$("#team-filter"), $("#myteam-select")]) {
+  for (const select of [$("#team-filter")]) {
     if (!select) continue;
     const existing = new Set(Array.from(select.options).map((o) => o.value));
     for (const t of teams) {
@@ -958,7 +958,7 @@ function renderMore() {
   $("#load-more-wrap").hidden = state.shown >= state.filtered.length;
 }
 
-/* ---------- My Team / League Rosters ---------- */
+/* ---------- League Rosters ---------- */
 
 function rosterTableHTML(sheet) {
   const section = (title, rows, cssClass) => {
@@ -973,31 +973,6 @@ function rosterTableHTML(sheet) {
     section("Taxi Squad (doesn't count against cap)", sheet.taxiSquad, "taxi-table") +
     section("Injured Reserve", sheet.ir, "ir-table")
   );
-}
-
-function renderMyTeamPage() {
-  const select = $("#myteam-select");
-  const body = $("#myteam-body");
-  const render = () => {
-    const rid = select.value;
-    const sheet = state.sheetByRoster[rid];
-    if (!sheet) {
-      body.innerHTML = '<div class="empty-state">No salary data for this team.</div>';
-      return;
-    }
-    const cap = sheet.cap;
-    body.innerHTML = `
-      <div class="team-cap-summary">
-        <span><strong>${money(cap.activeSalary + cap.irSalary)}</strong> active salary</span>
-        <span><strong>${money(cap.deadCap)}</strong> dead cap</span>
-        <span><strong>${money(cap.remainingCap)}</strong> remaining</span>
-        <span><strong>${money(cap.taxiSalary)}</strong> on taxi (not counted)</span>
-      </div>
-      ${rosterTableHTML(sheet)}
-    `;
-  };
-  select.addEventListener("change", render);
-  if (select.options.length) render();
 }
 
 function renderRostersPage() {
@@ -1324,7 +1299,6 @@ async function init() {
     applyFilters();
     renderStandings();
     renderCapMatrix();
-    renderMyTeamPage();
     renderRostersPage();
     renderLeaderboards();
     initTradeMachine();
