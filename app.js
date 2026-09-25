@@ -2567,6 +2567,9 @@ async function buildPlayerHistoryIndex() {
   const trades = [];
   const adds = [];
   const drops = [];
+  const draftPicks = []; // every drafted player, from EVERY draft Sleeper has for that season (rookie draft in
+  // May, vet/FA auction draft over the summer, etc.) — these never show up in /transactions, since a draft
+  // pick isn't a waiver/free-agent transaction, so they need their own fetch per season.
 
   const seasonToLeagueId = new Map(chain.map((l) => [String(l.season), l.league_id]));
   const draftInfoCache = new Map();
@@ -2646,6 +2649,41 @@ async function buildPlayerHistoryIndex() {
       weekTx.push(...results.flat());
     }
 
+    // Every draft Sleeper has on file for this season — not just the rookie
+    // draft. This league runs the rookie draft AND a summer vet/FA auction
+    // draft entirely through Sleeper, and neither shows up in /transactions
+    // (a draft pick isn't a waiver/free-agent transaction), so they need
+    // their own fetch.
+    let seasonDrafts = [];
+    try {
+      seasonDrafts = await fetchJSON(`${API}/league/${leagueId}/drafts`);
+    } catch (err) {
+      console.error(`Player history: drafts lookup failed for league ${leagueId}`, err);
+    }
+    const draftResults = await Promise.all(
+      (seasonDrafts || []).map((d) =>
+        fetchJSON(`${API}/draft/${d.draft_id}/picks`)
+          .then((picks) => ({ draft: d, picks }))
+          .catch(() => ({ draft: d, picks: [] }))
+      )
+    );
+    for (const { draft, picks } of draftResults) {
+      const ts = draft.start_time || draft.last_picked || 0;
+      for (const pick of picks || []) {
+        if (!pick.player_id) continue;
+        const amount = pick.metadata && pick.metadata.amount != null ? Number(pick.metadata.amount) : null;
+        draftPicks.push({
+          ts,
+          season,
+          playerId: String(pick.player_id),
+          teamName: rosterName.get(pick.roster_id) || `Roster ${pick.roster_id}`,
+          draftType: draft.type, // "auction" (vet/FA draft) vs "linear"/"snake" (rookie draft)
+          round: pick.round,
+          amount,
+        });
+      }
+    }
+
     const seen = new Set();
     for (const tx of weekTx) {
       if (!tx || seen.has(tx.transaction_id) || tx.status !== "complete") continue;
@@ -2698,7 +2736,7 @@ async function buildPlayerHistoryIndex() {
     }
   }
 
-  return { trades, adds, drops };
+  return { trades, adds, drops, draftPicks };
 }
 
 // Filters the full-history index down to one player's events, newest first.
@@ -2716,6 +2754,11 @@ function getPlayerHistory(playerId, index) {
   }
   for (const d of index.drops) {
     if (d.playerId === pid) events.push({ ts: d.ts, season: d.season, type: "drop", team: d.teamName });
+  }
+  for (const dp of index.draftPicks || []) {
+    if (dp.playerId === pid) {
+      events.push({ ts: dp.ts, season: dp.season, type: "draft", team: dp.teamName, draftType: dp.draftType, round: dp.round, amount: dp.amount });
+    }
   }
   events.sort((a, b) => (b.ts || 0) - (a.ts || 0));
   return events;
@@ -3244,6 +3287,23 @@ function playerHistoryEventHTML(ev) {
           <span class="player-history-date">${dateLabel} · ${ev.season}</span>
         </div>
         <p class="player-history-detail">${ev.team} — ${via}</p>
+      </div>
+    `;
+  }
+
+  if (ev.type === "draft") {
+    const roundLabel = ev.round ? `round ${ev.round}` : "";
+    const detail =
+      ev.draftType === "auction"
+        ? `${ev.team} — vet/FA auction draft${ev.amount != null ? `, $${ev.amount}` : ""}`
+        : `${ev.team} — rookie draft${roundLabel ? `, ${roundLabel}` : ""}`;
+    return `
+      <div class="player-history-item">
+        <div class="player-history-item-head">
+          <span class="player-history-badge player-history-badge-draft">🎯 Drafted</span>
+          <span class="player-history-date">${dateLabel} · ${ev.season}</span>
+        </div>
+        <p class="player-history-detail">${detail}</p>
       </div>
     `;
   }
