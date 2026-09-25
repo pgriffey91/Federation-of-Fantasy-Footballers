@@ -25,7 +25,7 @@ const state = {
   standingsExtra: { streakByRoster: new Map(), maxPFByRoster: new Map() },
   h2h: { loaded: false, loading: false, data: null }, // all-time head-to-head + trophy room (lazy-loaded)
   onThisDay: { loaded: false, loading: false, data: null }, // trades + drafts on this calendar day, any season (lazy-loaded)
-  rawTransactions: [], // this season's deduped, complete transactions (for the Draft Board's pick-acquisition lookup)
+  rawTransactions: [], // this season's deduped, complete transactions
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -2082,52 +2082,114 @@ async function loadTradedPicks(season) {
   }
 }
 
-// Finds how a (traded) pick ended up with its current owner, by searching
-// this season's trade transactions for the one that moved it there, and
-// summarizing what else changed hands in that same trade. Sleeper's
-// traded_picks endpoint only reports the final owner, not the history, so
-// if a pick changed hands more than once this returns the most recent trade
+// A pick can change hands in a trade from *any* past season (a manager can
+// deal away a future rookie pick years in advance), so finding "how was this
+// acquired" has to search full league history, not just this season's
+// transactions. That's expensive (every season x every week), so it's built
+// once, lazily, the first time a traded pick is actually clicked — not on
+// every draft-board render — and cached for the rest of the session.
+async function buildAllSeasonsTradeIndex() {
+  const chain = await collectSeasonChain();
+  const CONCURRENCY = 6;
+  const index = []; // { ts, draftPicks: [...], teams: [{ name, gained }] }
+
+  for (const league of chain) {
+    const leagueId = league.league_id;
+    let users, rosters;
+    try {
+      [users, rosters] = await Promise.all([
+        fetchJSON(`${API}/league/${leagueId}/users`),
+        fetchJSON(`${API}/league/${leagueId}/rosters`),
+      ]);
+    } catch (err) {
+      console.error(`Pick history: users/rosters failed for league ${leagueId}`, err);
+      continue;
+    }
+    const userMap = new Map(users.map((u) => [u.user_id, u]));
+    const rosterName = new Map(); // roster_id -> team name, as it was THAT season
+    for (const r of rosters) {
+      const u = userMap.get(r.owner_id) || {};
+      rosterName.set(r.roster_id, (u.metadata && u.metadata.team_name) || u.display_name || `Roster ${r.roster_id}`);
+    }
+
+    const maxWeek = CFG.maxWeek || 18;
+    const weeks = Array.from({ length: maxWeek }, (_, i) => i + 1);
+    const weekTx = [];
+    for (let i = 0; i < weeks.length; i += CONCURRENCY) {
+      const slice = weeks.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(
+        slice.map((w) => fetchJSON(`${API}/league/${leagueId}/transactions/${w}`).catch(() => []))
+      );
+      weekTx.push(...results.flat());
+    }
+
+    const seen = new Set();
+    for (const tx of weekTx) {
+      if (tx.type !== "trade" || tx.status !== "complete") continue;
+      if (seen.has(tx.transaction_id)) continue;
+      seen.add(tx.transaction_id);
+      if (!tx.draft_picks || !tx.draft_picks.length) continue; // only pick-moving trades matter here
+
+      const rosterIds = tx.roster_ids || [];
+      const gains = new Map();
+      for (const rid of rosterIds) gains.set(rid, []);
+      for (const [pid, rid] of Object.entries(tx.adds || {})) {
+        if (!gains.has(rid)) gains.set(rid, []);
+        gains.get(rid).push(playerLabel(pid));
+      }
+      for (const pick of tx.draft_picks) {
+        const toRoster = pick.owner_id;
+        if (!gains.has(toRoster)) gains.set(toRoster, []);
+        const suffix = pick.round === 1 ? "st" : pick.round === 2 ? "nd" : pick.round === 3 ? "rd" : "th";
+        const fromName = rosterName.get(pick.roster_id) || `Roster ${pick.roster_id}`;
+        gains.get(toRoster).push(`${pick.season} ${pick.round}${suffix}-round pick (${fromName}'s)`);
+      }
+      for (const move of tx.waiver_budget || []) {
+        if (!gains.has(move.receiver)) gains.set(move.receiver, []);
+        gains.get(move.receiver).push(`$${move.amount} FAAB`);
+      }
+
+      const teams = Array.from(gains.entries()).map(([rid, items]) => ({
+        name: rosterName.get(rid) || `Roster ${rid}`,
+        gained: items.length ? items : ["nothing notable"],
+      }));
+
+      index.push({ ts: tx.status_updated || tx.created || 0, draftPicks: tx.draft_picks, teams });
+    }
+  }
+
+  return index;
+}
+
+// Finds how a (traded) pick ended up with its current owner. Sleeper's
+// traded_picks endpoint only reports the final owner, not the history, so if
+// a pick changed hands more than once this returns the most recent trade
 // that routed it to its current owner.
-function findPickAcquisition(originalRid, round, season, ownerRid) {
+async function findPickAcquisition(originalRid, round, season, ownerRid) {
   if (ownerRid === originalRid) return { type: "original" };
 
+  if (!state.allSeasonsTradeIndexPromise) {
+    state.allSeasonsTradeIndexPromise = buildAllSeasonsTradeIndex();
+  }
+  let index;
+  try {
+    index = await state.allSeasonsTradeIndexPromise;
+  } catch (err) {
+    console.error("Pick history lookup failed:", err);
+    state.allSeasonsTradeIndexPromise = null; // allow a retry on the next click
+    return { type: "error" };
+  }
+
   let match = null;
-  for (const tx of state.rawTransactions) {
-    if (tx.type !== "trade" || !tx.draft_picks) continue;
-    const hit = tx.draft_picks.some(
+  for (const entry of index) {
+    const hit = entry.draftPicks.some(
       (p) => String(p.season) === String(season) && p.round === round && p.roster_id === originalRid && p.owner_id === ownerRid
     );
     if (!hit) continue;
-    const ts = tx.status_updated || tx.created || 0;
-    if (!match || ts > match.ts) match = { tx, ts };
+    if (!match || entry.ts > match.ts) match = entry;
   }
   if (!match) return { type: "unknown" };
-
-  const tx = match.tx;
-  const rosterIds = tx.roster_ids || [];
-  const gains = new Map();
-  for (const rid of rosterIds) gains.set(rid, []);
-  for (const [pid, rid] of Object.entries(tx.adds || {})) {
-    if (!gains.has(rid)) gains.set(rid, []);
-    gains.get(rid).push(playerLabel(pid));
-  }
-  for (const pick of tx.draft_picks || []) {
-    const toRoster = pick.owner_id;
-    if (!gains.has(toRoster)) gains.set(toRoster, []);
-    const suffix = pick.round === 1 ? "st" : pick.round === 2 ? "nd" : pick.round === 3 ? "rd" : "th";
-    gains.get(toRoster).push(`${pick.season} ${pick.round}${suffix}-round pick (${teamName(pick.roster_id)}'s)`);
-  }
-  for (const move of tx.waiver_budget || []) {
-    if (!gains.has(move.receiver)) gains.set(move.receiver, []);
-    gains.get(move.receiver).push(`$${move.amount} FAAB`);
-  }
-
-  const teams = Array.from(gains.entries()).map(([rid, items]) => ({
-    name: teamName(rid),
-    gained: items.length ? items : ["nothing notable"],
-  }));
-
-  return { type: "trade", date: match.ts, teams };
+  return { type: "trade", date: match.ts, teams: match.teams };
 }
 
 // Builds the 4-round / 40-pick rookie draft order for next season.
@@ -2174,7 +2236,12 @@ async function buildDraftBoard() {
         ownerAvatar: owner ? owner.avatar : null,
         traded,
         originalName: original ? original.name : `Roster ${originalRid}`,
-        acquisition: findPickAcquisition(originalRid, round, nextSeason, ownerRid),
+        // Resolved lazily on click (searching full league history is expensive) — see openDraftPickDrawer.
+        originalRid,
+        ownerRid,
+        round,
+        season: nextSeason,
+        acquisition: null,
       };
     });
     rounds.push({ round, picks });
@@ -2223,13 +2290,34 @@ function draftBoardHTML(board) {
   `;
 }
 
-function openDraftPickDrawer(pick) {
+let draftDrawerToken = 0;
+
+// Traded picks are resolved lazily (searching full league history is
+// expensive), so this shows the drawer immediately with a loading note,
+// then fills in the trade once it's found — caching the result on the pick
+// itself so re-opening the same card later is instant.
+async function openDraftPickDrawer(pick) {
   const inner = $("#draft-drawer-inner");
-  if (!inner) return;
-  const acq = pick.acquisition;
+  const drawer = $("#draft-drawer");
+  if (!inner || !drawer) return;
+
+  const myToken = ++draftDrawerToken;
+  drawer.hidden = false;
+  inner.innerHTML = `
+    <h3 class="h2h-drawer-title">Pick ${pick.label}</h3>
+    <p class="h2h-drawer-sub">Currently owned by ${pick.ownerName}</p>
+    ${pick.traded && !pick.acquisition ? '<p class="h2h-drawer-sub">Looking up trade history across every past season…</p>' : ""}
+  `;
+
+  let acq = pick.acquisition;
+  if (!acq) {
+    acq = await findPickAcquisition(pick.originalRid, pick.round, pick.season, pick.ownerRid);
+    pick.acquisition = acq; // cache so re-opening this card is instant
+  }
+  if (myToken !== draftDrawerToken) return; // a different pick was opened while this was loading
 
   let bodyHtml;
-  if (!acq || acq.type === "original") {
+  if (acq.type === "original") {
     bodyHtml = `<p class="h2h-drawer-sub">${pick.originalName}'s original pick — never traded.</p>`;
   } else if (acq.type === "trade") {
     const dateLabel = acq.date
@@ -2251,8 +2339,10 @@ function openDraftPickDrawer(pick) {
           .join("")}
       </div>
     `;
+  } else if (acq.type === "error") {
+    bodyHtml = `<p class="h2h-drawer-sub">Couldn't look up this pick's trade history right now — try again in a moment.</p>`;
   } else {
-    bodyHtml = `<p class="h2h-drawer-sub">This pick changed hands, but a matching trade couldn't be found in this season's transaction history.</p>`;
+    bodyHtml = `<p class="h2h-drawer-sub">This pick changed hands, but a matching trade couldn't be found anywhere in the league's transaction history.</p>`;
   }
 
   inner.innerHTML = `
@@ -2260,8 +2350,6 @@ function openDraftPickDrawer(pick) {
     <p class="h2h-drawer-sub">Currently owned by ${pick.ownerName}</p>
     ${bodyHtml}
   `;
-  const drawer = $("#draft-drawer");
-  if (drawer) drawer.hidden = false;
 }
 
 function wireDraftBoardClicks(board) {
@@ -2386,7 +2474,7 @@ async function init() {
     state.pointsByPlayer = statsData.totals;
     state.weeklyPointsByPlayer = statsData.weekly;
     state.standingsExtra = standingsExtra;
-    state.rawTransactions = transactions; // kept for the Draft Board's "how was this pick acquired" lookup
+    state.rawTransactions = transactions; // this season's deduped transactions (used by the activity feed)
 
     const liveEvents = transactionsToEvents(transactions);
     state.events = [...liveEvents, ...taxiEvents].sort((a, b) => (b.date || 0) - (a.date || 0));
