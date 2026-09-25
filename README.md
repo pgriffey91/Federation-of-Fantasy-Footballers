@@ -105,12 +105,18 @@ a searchable rule book. Built to be hosted for free on GitHub Pages.
   instead to filter out injured/inactive players who scored 0 points because
   they never suited up — a player needs at least half of the season's weeks
   played so far (minimum 1) to qualify, so the list reflects underperformance
-  rather than unavailability. Also includes a Contract Horizon table: every
-  rostered player's projected 2027 salary if kept, using the sheet's
-  already-computed keeper-escalator column, filterable by how big next
-  year's raise is. This format has no fixed contract lengths (every player
-  renews at the escalator rate or gets cut each offseason), so there's no
-  real "expiring contract" subset — the filter is by raise size instead.
+  rather than unavailability.
+- **Contract Horizon** — its own page: one card per team showing this year's
+  active-roster salary total against next year's projected total if every
+  current player is kept (using the sheet's already-computed keeper-escalator
+  column), with a per-player breakdown sorted by biggest raise first so an
+  owner can see at a glance who's driving next year's number up and who'd be
+  the easiest cut. Teams projecting over the hard cap are flagged. Sortable
+  by projected 2027 total, total raise, current cap space, or team name. This
+  format has no fixed contract lengths (every player renews at the escalator
+  rate or gets cut each offseason), so there's no real "expiring contract"
+  subset — this is the full cap picture each team faces next year, not a
+  filtered slice of it.
 - **Trade Machine** — pick two teams, select players to send each way, set
   retained salary, see the resulting cap space.
 - **Draft & FA** — a live 4-round/40-pick Draft Board for next season (picks
