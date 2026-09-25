@@ -86,12 +86,16 @@ a searchable rule book. Built to be hosted for free on GitHub Pages.
   retained salary, see the resulting cap space.
 - **Draft & FA** — a live 4-round/40-pick Draft Board for next season (picks
   1-4 set by Max PF ascending, picks 5-10 by current playoff seed worst-first,
-  with traded picks resolved live and shown as "via &lt;original team&gt;"),
-  plus the rookie salary schedule and free-agency/waiver rules.
+  all 10 picks shown in one row per round), with traded picks resolved live
+  and shown as "via &lt;original team&gt;" — click any pick to see how it was
+  acquired (the trade it came from, everything else that changed hands in
+  that trade, and the date), or "original pick, never traded" if it hasn't
+  moved. Plus the rookie salary schedule and free-agency/waiver rules.
 - **Head-to-Head** — a career leaderboard table (record, top-3-scoring
   seasons, playoff appearances, titles, championship-game appearances, #1
-  seeds, trades, rookie-Draft-Pick Conversion Rate, and Points-For vs.
-  Max-PF coaching efficiency), plus a card per current manager with a
+  seeds, trades, rookie-Draft-Pick Conversion Rate, and Lineup Efficiency —
+  Points For ÷ Max PF, a career-wide measure of how rarely a manager leaves
+  points on the bench), plus a card per current manager with a
   trophy-room key (championships 🏆, runner-ups 🥈, 3rd-place finishes 🥉,
   playoff appearances ⛳) — click a card to open a side drawer with that
   manager's all-time head-to-head record against every other manager.
