@@ -6,6 +6,7 @@
 <title>League Activity Feed</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/fuse.js@7.0.0/dist/fuse.min.js"></script>
 </head>
 <body>
   <header class="site-header">
@@ -16,6 +17,7 @@
           <span id="sync-badge" class="sync-badge">
             <span class="sync-dot"></span> <span id="sync-text">Loading…</span>
           </span>
+          <button id="global-search-btn" title="Search players (⌘K)">🔍 Search <span class="kbd-hint">⌘K</span></button>
           <button id="refresh-btn" title="Reload live data">↻ Refresh</button>
         </div>
       </div>
@@ -106,6 +108,23 @@
       <p class="page-sub">Biggest jump in points-per-game, first half of the season vs. most recent weeks.</p>
       <div id="lb-improved" class="leaderboard-grid"></div>
 
+      <h2 class="page-heading">Contract Horizon</h2>
+      <p class="page-sub">
+        Every rostered player's projected 2027 salary if kept, using the league's keeper-escalator schedule.
+        This format has no fixed contract lengths — every player renews at the escalator rate or gets cut each
+        offseason — so this is the full roster, not an "expiring contracts" subset that doesn't exist here.
+      </p>
+      <div class="control-group horizon-filter-group">
+        <label for="horizon-filter">Show</label>
+        <select id="horizon-filter">
+          <option value="0">All rostered players</option>
+          <option value="10">Escalating $10+ next year</option>
+          <option value="20">Escalating $20+ next year</option>
+          <option value="30">Escalating $30+ next year</option>
+        </select>
+      </div>
+      <div id="lb-horizon" class="leaderboard-grid"></div>
+
       <h2 class="page-heading">Most Active Traders</h2>
       <p class="page-sub">
         We skipped "Best Trades" — grading who won a trade needs a value judgment call, and it's more fun to
@@ -164,6 +183,21 @@
       GitHub Action — see <code>data/taxi-log.json</code>.
     </p>
   </footer>
+
+  <div class="search-overlay" id="search-overlay" hidden>
+    <div class="search-modal" role="dialog" aria-modal="true" aria-label="Player search">
+      <div class="search-modal-head">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="global-search-input" class="search-modal-input" placeholder="Search any player — name, team, position…" autocomplete="off">
+        <button id="search-modal-close" class="search-modal-close" aria-label="Close search">✕</button>
+      </div>
+      <div id="search-results" class="search-results"></div>
+      <div class="search-modal-foot">
+        <span><kbd>↵</kbd> select</span>
+        <span><kbd>esc</kbd> close</span>
+      </div>
+    </div>
+  </div>
 
   <script src="config.js"></script>
   <script src="sheet.js"></script>
