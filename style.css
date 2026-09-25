@@ -621,6 +621,7 @@ main {
 .lb-player { font-weight: 600; }
 .lb-sub { font-size: 0.78rem; color: var(--muted); }
 .lb-value { font-weight: 700; color: var(--emerald); }
+.lb-value.lb-value-negative { color: var(--crimson); }
 
 /* Trade Machine */
 .trade-teams {
