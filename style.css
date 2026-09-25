@@ -753,14 +753,6 @@ main {
 .roster-card summary { cursor: pointer; font-weight: 600; }
 
 /* Leaderboards */
-.horizon-filter-group {
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius);
-  padding: 12px 16px;
-  margin-bottom: 12px;
-  display: inline-flex;
-}
 .leaderboard-grid {
   background: var(--panel);
   border: 1px solid var(--panel-border);
@@ -787,6 +779,52 @@ main {
 .lb-sub { font-size: 0.78rem; color: var(--muted); }
 .lb-value { font-weight: 700; color: var(--emerald); }
 .lb-value.lb-value-negative { color: var(--crimson); }
+
+/* Contract Horizon */
+.horizon-sort-group {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 14px;
+  display: inline-flex;
+}
+.horizon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 14px;
+}
+.horizon-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.horizon-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 8px;
+}
+.horizon-team-name { font-weight: 700; font-size: 1.02rem; }
+.horizon-totals {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.horizon-total-figure { font-weight: 600; }
+.horizon-arrow { color: var(--muted); }
+.horizon-delta { font-size: 0.78rem; color: var(--muted); }
+.horizon-delta.horizon-raise { color: var(--amber); }
+.horizon-raise { color: var(--amber); }
+.horizon-warning {
+  display: inline-block;
+  margin-bottom: 8px;
+}
+.horizon-table { margin: 6px 0 0; font-size: 0.82rem; }
 
 /* Trade Machine */
 .trade-teams {
@@ -1392,7 +1430,8 @@ select, input[type="search"] {
  * square, the team name/avatar block, the leaderboard's manager name) are
  * left as the card's plain header content instead of a labeled row.
  */
-.standings-card, .h2h-lb-wrap { container-type: inline-size; }
+.standings-card, .h2h-lb-wrap, .horizon-card { container-type: inline-size; }
+.horizon-card { container-name: horizoncard; }
 
 @container standings (max-width: 768px) {
   .standings-table-wrap { overflow-x: visible; }
@@ -1483,6 +1522,42 @@ select, input[type="search"] {
     letter-spacing: 0.05em;
     font-weight: 600;
     text-align: left;
+  }
+}
+
+@container horizoncard (max-width: 420px) {
+  .horizon-table.responsive-stack-table { white-space: normal; }
+  .horizon-table.responsive-stack-table thead { display: none; }
+  .horizon-table.responsive-stack-table, .horizon-table.responsive-stack-table tbody {
+    display: block;
+    width: 100%;
+  }
+  .horizon-table.responsive-stack-table tbody tr {
+    display: block;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .horizon-table.responsive-stack-table tbody tr:last-child { border-bottom: none; }
+  .horizon-table.responsive-stack-table tbody td {
+    display: block;
+    width: 100%;
+    border-bottom: none;
+    padding: 3px 0;
+  }
+  .horizon-table.responsive-stack-table tbody td[data-label] {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    min-height: 32px;
+  }
+  .horizon-table.responsive-stack-table tbody td[data-label]::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
   }
 }
 
