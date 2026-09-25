@@ -95,7 +95,12 @@ a searchable rule book. Built to be hosted for free on GitHub Pages.
   Head-to-Head/On This Day, so a pick traded two or three seasons ago still
   resolves correctly; that history is only fetched the first time you click
   a pick (and cached after that), so it doesn't slow down the page otherwise.
-  Plus the rookie salary schedule and free-agency/waiver rules.
+  If a trade also moved a pick from a season whose draft has already
+  happened (e.g. a 2026 pick, dealt in an earlier trade), that line shows
+  who it turned into ("2026 3rd-round pick (Team's) — became Player Name")
+  by matching the pick's original draft slot against that season's actual
+  Sleeper draft results. Plus the rookie salary schedule and free-agency/
+  waiver rules.
 - **Head-to-Head** — a career leaderboard table (record, top-3-scoring
   seasons, playoff appearances, titles, championship-game appearances, #1
   seeds, trades, rookie-Draft-Pick Conversion Rate, and Lineup Efficiency —
