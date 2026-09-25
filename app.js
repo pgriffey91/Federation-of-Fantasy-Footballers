@@ -41,6 +41,26 @@ async function fetchJSON(url) {
   return res.json();
 }
 
+// Same as fetchJSON, but retries a couple times with a short backoff before
+// giving up. Used by the full-history features (Record Book, On This Day,
+// Draft Board pick lookup, player card history) — they fan out to dozens of
+// Sleeper API calls per season, and a single transient failure or rate-limit
+// blip in that fan-out used to just silently come back as "no data" for
+// whatever it touched (e.g. a whole season's drafts quietly vanishing from a
+// player's transaction history) with nothing visible to say so.
+async function fetchJSONWithRetry(url, attempts = 3, delayMs = 500) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fetchJSON(url);
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 // Loads the pre-built season cache (data/season-cache.json), if present. A
 // scheduled GitHub Action (scripts/build-cache.mjs) refreshes it every 15
 // minutes with every already-completed week's transactions/stats/matchups,
@@ -2618,17 +2638,21 @@ async function buildPlayerHistoryIndex() {
     return [meta.first_name, meta.last_name].filter(Boolean).join(" ") || null;
   }
 
+  let incomplete = false; // true if ANY fetch below failed even after retries — the history is then a
+  // possibly-partial best-effort, and the UI says so rather than silently presenting it as complete.
+
   for (const league of chain) {
     const leagueId = league.league_id;
     const season = league.season;
     let users, rosters;
     try {
       [users, rosters] = await Promise.all([
-        fetchJSON(`${API}/league/${leagueId}/users`),
-        fetchJSON(`${API}/league/${leagueId}/rosters`),
+        fetchJSONWithRetry(`${API}/league/${leagueId}/users`),
+        fetchJSONWithRetry(`${API}/league/${leagueId}/rosters`),
       ]);
     } catch (err) {
       console.error(`Player history: users/rosters failed for league ${leagueId}`, err);
+      incomplete = true;
       continue;
     }
     const userMap = new Map(users.map((u) => [u.user_id, u]));
@@ -2644,7 +2668,13 @@ async function buildPlayerHistoryIndex() {
     for (let i = 0; i < weeks.length; i += CONCURRENCY) {
       const slice = weeks.slice(i, i + CONCURRENCY);
       const results = await Promise.all(
-        slice.map((w) => fetchJSON(`${API}/league/${leagueId}/transactions/${w}`).catch(() => []))
+        slice.map((w) =>
+          fetchJSONWithRetry(`${API}/league/${leagueId}/transactions/${w}`).catch((err) => {
+            console.error(`Player history: transactions week ${w} failed for league ${leagueId}`, err);
+            incomplete = true;
+            return [];
+          })
+        )
       );
       weekTx.push(...results.flat());
     }
@@ -2656,15 +2686,20 @@ async function buildPlayerHistoryIndex() {
     // their own fetch.
     let seasonDrafts = [];
     try {
-      seasonDrafts = await fetchJSON(`${API}/league/${leagueId}/drafts`);
+      seasonDrafts = await fetchJSONWithRetry(`${API}/league/${leagueId}/drafts`);
     } catch (err) {
       console.error(`Player history: drafts lookup failed for league ${leagueId}`, err);
+      incomplete = true;
     }
     const draftResults = await Promise.all(
       (seasonDrafts || []).map((d) =>
-        fetchJSON(`${API}/draft/${d.draft_id}/picks`)
+        fetchJSONWithRetry(`${API}/draft/${d.draft_id}/picks`)
           .then((picks) => ({ draft: d, picks }))
-          .catch(() => ({ draft: d, picks: [] }))
+          .catch((err) => {
+            console.error(`Player history: picks failed for draft ${d.draft_id}`, err);
+            incomplete = true;
+            return { draft: d, picks: [] };
+          })
       )
     );
     for (const { draft, picks } of draftResults) {
@@ -2736,7 +2771,7 @@ async function buildPlayerHistoryIndex() {
     }
   }
 
-  return { trades, adds, drops, draftPicks };
+  return { trades, adds, drops, draftPicks, incomplete };
 }
 
 // Filters the full-history index down to one player's events, newest first.
@@ -3355,10 +3390,12 @@ async function openPlayerCard(playerId) {
 
   let history = null;
   let historyFailed = false;
+  let historyIncomplete = false;
   try {
     if (!state.playerHistoryIndexPromise) state.playerHistoryIndexPromise = buildPlayerHistoryIndex();
     const index = await state.playerHistoryIndexPromise;
     history = getPlayerHistory(playerId, index);
+    historyIncomplete = !!index.incomplete;
   } catch (err) {
     console.error("Player history lookup failed:", err);
     state.playerHistoryIndexPromise = null; // allow a retry next time
@@ -3367,11 +3404,24 @@ async function openPlayerCard(playerId) {
 
   if (myToken !== playerCardToken) return; // a different player card was opened while this was loading
 
+  const incompleteNote = historyIncomplete
+    ? '<p class="player-history-warning">⚠️ A few Sleeper API calls failed while loading this — some events (especially older drafts) may be missing. <a href="#" id="player-card-retry-history">Try again</a>.</p>'
+    : "";
+
   bodyEl.innerHTML = `
     ${statsHtml}
     <h4 class="player-card-section-title">Transaction History</h4>
-    ${historyFailed ? '<p class="empty-state">Couldn\'t load transaction history right now — try again in a moment.</p>' : playerCardHistoryHTML(history)}
+    ${historyFailed ? '<p class="empty-state">Couldn\'t load transaction history right now — try again in a moment.</p>' : incompleteNote + playerCardHistoryHTML(history)}
   `;
+
+  const retryLink = $("#player-card-retry-history");
+  if (retryLink) {
+    retryLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      state.playerHistoryIndexPromise = null; // force a fresh fetch
+      openPlayerCard(playerId);
+    });
+  }
 }
 
 function closePlayerCard() {
