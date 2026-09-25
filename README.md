@@ -182,9 +182,11 @@ played), their salary this year, next year's keeper price if kept, and an
 estimated price two offseasons out (computed by applying the keeper
 escalator a second time, since that figure isn't in the sheet — labeled as
 a ballpark, not a lock), plus their full transaction history across every
-past season (adds with FAAB bid, drops, and trades — shown the same way as
-the Draft Board, with everything each side received, including any draft
-pick already turned into a drafted player by name). A free agent's card
+past season (adds with FAAB bid, drops, trades — shown the same way as the
+Draft Board, with everything each side received, including any draft pick
+already turned into a drafted player by name — and every draft pick from
+EVERY Sleeper draft that season, not just the rookie draft: this covers the
+summer vet/FA auction draft too, tagged with the winning bid). A free agent's card
 just shows their stats and a "not currently on any roster" note in place of
 salary figures. The history lookup walks the league's entire season chain
 the same way Record Book and On This Day do, so it's only fetched the first
