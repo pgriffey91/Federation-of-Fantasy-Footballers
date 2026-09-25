@@ -31,6 +31,7 @@
         <button class="nav-btn" data-page="leaderboards">Leaderboards</button>
         <button class="nav-btn" data-page="trade">Trade Machine</button>
         <button class="nav-btn" data-page="draft">Draft &amp; FA</button>
+        <button class="nav-btn" data-page="h2h">Head-to-Head</button>
         <button class="nav-btn" data-page="rules">Rule Book</button>
       </nav>
     </div>
@@ -91,6 +92,26 @@
 
       <h2 class="page-heading">Dead Cap Wall</h2>
       <div id="lb-deadcap" class="leaderboard-grid"></div>
+
+      <h2 class="page-heading">Biggest Busts</h2>
+      <p class="page-sub">Worst points-per-dollar among meaningful salaries ($10+). The value leaderboard's mirror image.</p>
+      <div id="lb-bust" class="leaderboard-grid"></div>
+
+      <h2 class="page-heading">Best Waiver Pickups</h2>
+      <p class="page-sub">Cheapest winning FAAB bids still producing points on your active roster.</p>
+      <div id="lb-waiver" class="leaderboard-grid"></div>
+
+      <h2 class="page-heading">Most Improved</h2>
+      <p class="page-sub">Biggest jump in points-per-game, first half of the season vs. most recent weeks.</p>
+      <div id="lb-improved" class="leaderboard-grid"></div>
+
+      <h2 class="page-heading">Most Active Traders</h2>
+      <p class="page-sub">
+        We skipped "Best Trades" — grading who won a trade needs a value judgment call, and it's more fun to
+        argue about in the group chat than to have a formula decide for you. Here's the lighter version: who's
+        made the most trades this season.
+      </p>
+      <div id="lb-traders" class="leaderboard-grid"></div>
     </section>
 
     <!-- TRADE MACHINE -->
@@ -105,11 +126,20 @@
 
     <!-- DRAFT & FA -->
     <section id="page-draft" class="page" hidden>
+      <h2 class="page-heading">Draft Board</h2>
+      <div id="draft-board"></div>
+
       <h2 class="page-heading">Rookie Salary Schedule</h2>
       <div id="rookie-schedule" class="rule-table"></div>
 
       <h2 class="page-heading">Free Agency &amp; Waivers</h2>
       <ul id="fa-rules" class="rule-list"></ul>
+    </section>
+
+    <!-- HEAD-TO-HEAD / TROPHY ROOM -->
+    <section id="page-h2h" class="page" hidden>
+      <h2 class="page-heading">Head-to-Head &amp; Trophy Room</h2>
+      <div id="h2h-body"></div>
     </section>
 
     <!-- RULE BOOK -->
