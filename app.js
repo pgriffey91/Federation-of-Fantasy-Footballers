@@ -20,6 +20,7 @@ const state = {
   sheetByRoster: {}, // rosterId(string) -> { activeRoster, taxiSquad, ir, cap }
   pointsByPlayer: new Map(), // player_id -> total season points (approx half-PPR)
   weeklyPointsByPlayer: new Map(), // player_id -> Map(week -> points), for trend leaderboards
+  gamesPlayedByPlayer: new Map(), // player_id -> count of weeks actually played (Sleeper has no snap-count data)
   trade: { teamA: null, teamB: null, retained: {} }, // retained: { "A:PlayerName": $, "B:PlayerName": $ }
   rosterPositions: [], // league's starting-lineup slot list (e.g. ["QB","RB","RB","WR","WR","TE","FLEX","DEF","K","BN",...])
   standingsExtra: { streakByRoster: new Map(), maxPFByRoster: new Map() },
@@ -1132,9 +1133,24 @@ function renderLeaderboards() {
     .join("") || '<div class="empty-state">Not enough stats yet this season.</div>';
 
   // Highest paid
-  const highest = [...entries].sort((a, b) => b.salary - a.salary).slice(0, 10);
+  const highest = [...entries]
+    .sort((a, b) => b.salary - a.salary)
+    .slice(0, 10)
+    .map((p) => {
+      const pid = playerIdForName(p.name);
+      const pts = pid ? state.pointsByPlayer.get(pid) || 0 : 0;
+      return { ...p, pts, value: pts / p.salary };
+    });
   $("#lb-highest").innerHTML = highest
-    .map((p, i) => leaderboardRowHTML(i + 1, `${p.name} (${p.pos})`, teamName(p.rosterId), money(p.salary)))
+    .map((p, i) =>
+      leaderboardRowHTML(
+        i + 1,
+        `${p.name} (${p.pos})`,
+        `${teamName(p.rosterId)} · ${p.pts.toFixed(1)} pts`,
+        `${money(p.salary)} · ${p.value.toFixed(2)} pts/$`,
+        p.value < 0
+      )
+    )
     .join("");
 
   // Dead cap wall
@@ -1148,14 +1164,27 @@ function renderLeaderboards() {
       .map((x, i) => leaderboardRowHTML(i + 1, teamName(x.rid), "Dead cap absorbed", money(x.deadCap)))
       .join("") || '<div class="empty-state">No dead cap on any roster right now.</div>';
 
-  // Biggest busts: worst points-per-dollar among meaningful salaries.
+  // Biggest busts: worst points-per-dollar among meaningful salaries. Sleeper
+  // doesn't expose snap counts anywhere in its stats API (checked — there's
+  // no snap-related field at all), so as a stand-in for "was this guy
+  // actually active," this requires a minimum number of games actually
+  // played (Sleeper's own `gp` flag) — that keeps injured/inactive players
+  // who simply never played (0 pts because they never suited up, not
+  // because they were bad) out of a list that's supposed to be about
+  // underperformance, not unavailability. The floor rises with the season
+  // (half of the weeks played so far, minimum 1) so it isn't too strict in
+  // Week 1-2.
+  const weeksSoFar = (state.league && state.league.settings && state.league.settings.leg) || 1;
+  const minGamesForBust = Math.max(1, Math.ceil(weeksSoFar / 2));
   const bustRanked = entries
     .filter((p) => p.salary >= 10)
     .map((p) => {
       const pid = playerIdForName(p.name);
       const pts = pid ? state.pointsByPlayer.get(pid) || 0 : 0;
-      return { ...p, pts, value: pts / p.salary };
+      const gamesPlayed = pid ? state.gamesPlayedByPlayer.get(pid) || 0 : 0;
+      return { ...p, pts, gamesPlayed, value: pts / p.salary };
     })
+    .filter((p) => p.gamesPlayed >= minGamesForBust)
     .sort((a, b) => a.value - b.value)
     .slice(0, 10);
 
@@ -1165,7 +1194,7 @@ function renderLeaderboards() {
         leaderboardRowHTML(
           i + 1,
           `${p.name} (${p.pos})`,
-          `${teamName(p.rosterId)} · ${money(p.salary)} salary · ${p.pts.toFixed(1)} pts`,
+          `${teamName(p.rosterId)} · ${money(p.salary)} salary · ${p.pts.toFixed(1)} pts in ${p.gamesPlayed} gm${p.gamesPlayed === 1 ? "" : "s"}`,
           `${p.value.toFixed(2)} pts/$`,
           p.value < 0
         )
@@ -2550,7 +2579,7 @@ async function init() {
       }),
       StatsData.loadSeasonPoints(league.season, currentWeek).catch((err) => {
         console.error("Stats load failed:", err);
-        return { totals: new Map(), weekly: new Map() };
+        return { totals: new Map(), weekly: new Map(), gamesPlayed: new Map() };
       }),
       loadStandingsExtras(currentWeek).catch((err) => {
         console.error("Standings extras (streak/Max PF) failed:", err);
@@ -2561,6 +2590,7 @@ async function init() {
     state.sheetByRoster = sheetByRoster;
     state.pointsByPlayer = statsData.totals;
     state.weeklyPointsByPlayer = statsData.weekly;
+    state.gamesPlayedByPlayer = statsData.gamesPlayed;
     state.standingsExtra = standingsExtra;
     state.rawTransactions = transactions; // this season's deduped transactions (used by the activity feed)
 
