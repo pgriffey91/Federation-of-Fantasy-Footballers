@@ -19,9 +19,11 @@ const state = {
   shown: 0,
   sheetByRoster: {}, // rosterId(string) -> { activeRoster, taxiSquad, ir, cap }
   pointsByPlayer: new Map(), // player_id -> total season points (approx half-PPR)
+  weeklyPointsByPlayer: new Map(), // player_id -> Map(week -> points), for trend leaderboards
   trade: { teamA: null, teamB: null, retained: {} }, // retained: { "A:PlayerName": $, "B:PlayerName": $ }
   rosterPositions: [], // league's starting-lineup slot list (e.g. ["QB","RB","RB","WR","WR","TE","FLEX","DEF","K","BN",...])
   standingsExtra: { streakByRoster: new Map(), maxPFByRoster: new Map() },
+  h2h: { loaded: false, loading: false, data: null }, // all-time head-to-head + trophy room (lazy-loaded)
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -99,13 +101,18 @@ function playerIdForName(name) {
 /* ---------- League / rosters / users ---------- */
 
 async function loadLeagueShell() {
-  const [league, users, rosters] = await Promise.all([
+  const [league, users, rosters, nflState] = await Promise.all([
     fetchJSON(`${API}/league/${CFG.leagueId}`),
     fetchJSON(`${API}/league/${CFG.leagueId}/users`),
     fetchJSON(`${API}/league/${CFG.leagueId}/rosters`),
+    fetchJSON(`${API}/state/nfl`).catch((err) => {
+      console.error("NFL state load failed (trade-deadline countdown disabled):", err);
+      return null;
+    }),
   ]);
 
   state.league = league;
+  state.nflState = nflState;
   const userMap = new Map(users.map((u) => [u.user_id, u]));
 
   state.rosterMap.clear();
@@ -134,7 +141,7 @@ async function loadLeagueShell() {
   document.title = CFG.siteName || league.name || "League Activity Feed";
 
   populateTeamFilter();
-  renderHeaderStats(league);
+  renderHeaderStats(league, nflState);
   return league;
 }
 
@@ -164,11 +171,48 @@ function teamName(rosterId) {
 
 /* ---------- Header stats ---------- */
 
-function renderHeaderStats(league) {
+let deadlineTimer = null;
+
+function renderHeaderStats(league, nflState) {
   $("#stat-cap").textContent = `$${CFG.hardCap}`;
 
-  const deadline = league.settings && league.settings.trade_deadline;
-  $("#stat-deadline").textContent = deadline ? `Week ${deadline}` : "—";
+  const deadlineWeek = league.settings && league.settings.trade_deadline;
+  const deadlineEl = $("#stat-deadline");
+
+  if (deadlineTimer) {
+    clearInterval(deadlineTimer);
+    deadlineTimer = null;
+  }
+
+  // Sleeper's weeks reset every 7 days from the NFL season's start date, so
+  // the trade-deadline week's start date is season_start_date + (week-1)*7d.
+  if (deadlineEl && deadlineWeek && nflState && nflState.season_start_date && league.status !== "complete") {
+    const seasonStart = new Date(`${nflState.season_start_date}T00:00:00Z`);
+    const deadlineDate = new Date(seasonStart.getTime() + (deadlineWeek - 1) * 7 * 24 * 3600 * 1000);
+
+    const tick = () => {
+      const diffMs = deadlineDate.getTime() - Date.now();
+      deadlineEl.title = `Trade deadline: Week ${deadlineWeek} (${deadlineDate.toLocaleDateString(undefined, { month: "short", day: "numeric" })})`;
+      if (diffMs <= 0) {
+        deadlineEl.textContent = `Week ${deadlineWeek} — Passed`;
+        deadlineEl.classList.add("deadline-passed");
+        clearInterval(deadlineTimer);
+        deadlineTimer = null;
+        return;
+      }
+      deadlineEl.classList.remove("deadline-passed");
+      const days = Math.floor(diffMs / (24 * 3600 * 1000));
+      const hours = Math.floor((diffMs % (24 * 3600 * 1000)) / (3600 * 1000));
+      const mins = Math.floor((diffMs % (3600 * 1000)) / (60 * 1000));
+      deadlineEl.textContent = days > 0 ? `${days}d ${hours}h` : `${hours}h ${mins}m`;
+    };
+
+    tick();
+    deadlineTimer = setInterval(tick, 60 * 1000);
+  } else if (deadlineEl) {
+    deadlineEl.textContent = deadlineWeek ? `Week ${deadlineWeek}` : "—";
+    deadlineEl.title = "";
+  }
 
   const leg = (league.settings && league.settings.leg) || 1;
   const playoffStart = (league.settings && league.settings.playoff_week_start) || 15;
@@ -562,21 +606,16 @@ function streakClass(streak) {
   return "";
 }
 
-function renderStandings() {
-  const container = $("#standings");
-  if (!container) return;
-
+// Shared seeding logic: seeds 1-4 by record (wins desc, losses asc, points
+// scored as tiebreak); seeds 5-10 by points scored regardless of record, per
+// league convention. Returns an array of 10 team objects (rid + roster info)
+// in seed order (index 0 = seed 1). Used by both Standings and the Draft
+// Board (picks 5-10 mirror seeds 1-6, picks 1-4 come from seeds 7-10).
+function getStandingsRanked() {
   const rosterIds = Array.from(state.rosterMap.keys());
-  if (!rosterIds.length) {
-    container.innerHTML = '<div class="empty-state">Standings not available.</div>';
-    return;
-  }
-
+  if (!rosterIds.length) return [];
   const teams = rosterIds.map((rid) => ({ rid, ...state.rosterMap.get(rid) }));
 
-  // Seeds 1-4: sorted by record (wins desc, then losses asc, then points
-  // scored as the tiebreaker). Seeds 5-10: sorted purely by points scored,
-  // regardless of record, per league convention.
   const byRecord = [...teams].sort((a, b) => {
     if (b.wins !== a.wins) return b.wins - a.wins;
     if (a.losses !== b.losses) return a.losses - b.losses;
@@ -586,7 +625,19 @@ function renderStandings() {
   const top4Ids = new Set(top4.map((t) => t.rid));
   const rest = teams.filter((t) => !top4Ids.has(t.rid)).sort((a, b) => b.pointsFor - a.pointsFor);
 
-  const ranked = [...top4, ...rest];
+  return [...top4, ...rest];
+}
+
+function renderStandings() {
+  const container = $("#standings");
+  if (!container) return;
+
+  const ranked = getStandingsRanked();
+  if (!ranked.length) {
+    container.innerHTML = '<div class="empty-state">Standings not available.</div>';
+    return;
+  }
+
   const extra = state.standingsExtra;
   const week = (state.league && state.league.settings && state.league.settings.leg) || 1;
 
@@ -1061,6 +1112,120 @@ function renderLeaderboards() {
     deadCapRanked
       .map((x, i) => leaderboardRowHTML(i + 1, teamName(x.rid), "Dead cap absorbed", money(x.deadCap)))
       .join("") || '<div class="empty-state">No dead cap on any roster right now.</div>';
+
+  // Biggest busts: worst points-per-dollar among meaningful salaries.
+  const bustRanked = entries
+    .filter((p) => p.salary >= 10)
+    .map((p) => {
+      const pid = playerIdForName(p.name);
+      const pts = pid ? state.pointsByPlayer.get(pid) || 0 : 0;
+      return { ...p, pts, value: pts / p.salary };
+    })
+    .sort((a, b) => a.value - b.value)
+    .slice(0, 10);
+
+  $("#lb-bust").innerHTML =
+    bustRanked
+      .map((p, i) =>
+        leaderboardRowHTML(
+          i + 1,
+          `${p.name} (${p.pos})`,
+          `${teamName(p.rosterId)} · ${money(p.salary)} salary · ${p.pts.toFixed(1)} pts`,
+          `${p.value.toFixed(2)} pts/$`
+        )
+      )
+      .join("") || '<div class="empty-state">Not enough stats yet this season.</div>';
+
+  // Best waiver pickups: cheapest winning FAAB bids (amount !== null, incl.
+  // $0 wins) still producing points, for players still on an active roster.
+  const activeByPlayerId = new Map();
+  for (const p of entries) {
+    const pid = playerIdForName(p.name);
+    if (pid) activeByPlayerId.set(pid, p);
+  }
+  const waiverAdds = new Map(); // player_id -> most recent qualifying add event
+  for (const ev of state.events) {
+    if (ev.type !== "add" || ev.amount == null) continue;
+    const pid = ev.playerIds && ev.playerIds[0];
+    if (!pid || !activeByPlayerId.has(pid)) continue;
+    const prev = waiverAdds.get(pid);
+    if (!prev || (ev.date || 0) > (prev.date || 0)) waiverAdds.set(pid, ev);
+  }
+  const waiverRanked = Array.from(waiverAdds.entries())
+    .map(([pid, ev]) => {
+      const rosterEntry = activeByPlayerId.get(pid);
+      const pts = state.pointsByPlayer.get(pid) || 0;
+      const cost = Math.max(ev.amount, 1);
+      return { name: rosterEntry.name, pos: rosterEntry.pos, rosterId: ev.rosterIds[0], bid: ev.amount, pts, value: pts / cost };
+    })
+    .filter((p) => p.pts > 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 10);
+
+  $("#lb-waiver").innerHTML =
+    waiverRanked
+      .map((p, i) =>
+        leaderboardRowHTML(
+          i + 1,
+          `${p.name} (${p.pos})`,
+          `${teamName(p.rosterId)} · $${p.bid} FAAB · ${p.pts.toFixed(1)} pts`,
+          `${p.value.toFixed(2)} pts/$`
+        )
+      )
+      .join("") || '<div class="empty-state">No paid waiver claims found yet this season.</div>';
+
+  // Most improved: PPG in the most recent weeks vs. the season's first half,
+  // for players currently on an active roster with enough games in both
+  // windows to make the comparison meaningful.
+  const week = (state.league && state.league.settings && state.league.settings.leg) || 1;
+  const splitWeek = Math.max(1, Math.floor(week / 2));
+  const improvedRanked = entries
+    .map((p) => {
+      const pid = playerIdForName(p.name);
+      const weekly = pid ? state.weeklyPointsByPlayer.get(pid) : null;
+      if (!weekly) return null;
+      let earlyPts = 0, earlyGames = 0, recentPts = 0, recentGames = 0;
+      weekly.forEach((pts, w) => {
+        if (w <= splitWeek) { earlyPts += pts; earlyGames++; }
+        else if (w <= week) { recentPts += pts; recentGames++; }
+      });
+      if (earlyGames < 2 || recentGames < 2) return null;
+      const earlyPPG = earlyPts / earlyGames;
+      const recentPPG = recentPts / recentGames;
+      return { ...p, earlyPPG, recentPPG, improvement: recentPPG - earlyPPG };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.improvement - a.improvement)
+    .slice(0, 10);
+
+  $("#lb-improved").innerHTML =
+    improvedRanked
+      .map((p, i) =>
+        leaderboardRowHTML(
+          i + 1,
+          `${p.name} (${p.pos})`,
+          `${teamName(p.rosterId)} · ${p.earlyPPG.toFixed(1)} → ${p.recentPPG.toFixed(1)} PPG`,
+          `+${p.improvement.toFixed(1)} PPG`
+        )
+      )
+      .join("") || '<div class="empty-state">Not enough weeks played yet to compare trends.</div>';
+
+  // Most active traders: trade-event count per roster, this season.
+  const tradeCounts = new Map();
+  for (const ev of state.events) {
+    if (ev.type !== "trade") continue;
+    for (const rid of ev.rosterIds || []) {
+      tradeCounts.set(rid, (tradeCounts.get(rid) || 0) + 1);
+    }
+  }
+  const tradersRanked = Array.from(tradeCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10);
+
+  $("#lb-traders").innerHTML =
+    tradersRanked
+      .map(([rid, count], i) => leaderboardRowHTML(i + 1, teamName(rid), "Trades this season", String(count)))
+      .join("") || '<div class="empty-state">No trades yet this season.</div>';
 }
 
 /* ---------- Trade Machine ---------- */
@@ -1192,6 +1357,261 @@ function initTradeMachine() {
   renderTradeSide("B");
 }
 
+/* ---------- Head-to-Head / Trophy Room (lazy-loaded) ---------- */
+
+// Walks the league's previous_league_id chain back to its root season.
+// Returns league objects, most recent season first.
+async function collectSeasonChain() {
+  const chain = [];
+  let leagueId = CFG.leagueId;
+  const seen = new Set();
+  while (leagueId && !seen.has(leagueId)) {
+    seen.add(leagueId);
+    const league = await fetchJSON(`${API}/league/${leagueId}`);
+    chain.push(league);
+    leagueId = league.previous_league_id || null;
+  }
+  return chain;
+}
+
+// Aggregates all-time head-to-head records, playoff appearances, and
+// trophies (championship / runner-up / 3rd place) per manager, keyed by
+// Sleeper's stable user_id (not roster_id, which is season-scoped and can
+// be reassigned when a franchise changes hands).
+async function buildH2HData() {
+  const chain = await collectSeasonChain();
+  const userInfo = new Map(); // user_id -> { name, avatar }
+  const records = new Map(); // `${a}|${b}` -> { wins, losses, ties } (a's record vs b)
+  const trophies = new Map(); // user_id -> { championships, runnerups, thirds, playoffs, seasons: [] }
+  const CONCURRENCY = 6;
+
+  const ensureUser = (uid, name, avatar) => {
+    if (!uid) return;
+    const prev = userInfo.get(uid) || {};
+    userInfo.set(uid, { name: name || prev.name || `Manager ${uid}`, avatar: avatar || prev.avatar || null });
+  };
+  const ensureTrophy = (uid) => {
+    if (!trophies.has(uid)) trophies.set(uid, { championships: 0, runnerups: 0, thirds: 0, playoffs: 0, seasons: [] });
+    return trophies.get(uid);
+  };
+  const bump = (a, b, result) => {
+    const key = `${a}|${b}`;
+    if (!records.has(key)) records.set(key, { wins: 0, losses: 0, ties: 0 });
+    records.get(key)[result]++;
+  };
+
+  for (const league of chain) {
+    const leagueId = league.league_id;
+    const season = league.season;
+    let users, rosters;
+    try {
+      [users, rosters] = await Promise.all([
+        fetchJSON(`${API}/league/${leagueId}/users`),
+        fetchJSON(`${API}/league/${leagueId}/rosters`),
+      ]);
+    } catch (err) {
+      console.error(`H2H: users/rosters failed for season ${season}`, err);
+      continue;
+    }
+
+    const userMap = new Map(users.map((u) => [u.user_id, u]));
+    const rosterToUser = new Map(); // roster_id -> user_id, this season only
+    for (const r of rosters) {
+      if (!r.owner_id) continue;
+      rosterToUser.set(r.roster_id, r.owner_id);
+      const u = userMap.get(r.owner_id) || {};
+      const teamName = (u.metadata && u.metadata.team_name) || u.display_name || `Roster ${r.roster_id}`;
+      ensureUser(r.owner_id, teamName, u.avatar ? `https://sleepercdn.com/avatars/thumbs/${u.avatar}` : null);
+    }
+
+    const maxWeek = CFG.maxWeek || 18;
+    const weeks = Array.from({ length: maxWeek }, (_, i) => i + 1);
+    const weekResults = [];
+    for (let i = 0; i < weeks.length; i += CONCURRENCY) {
+      const slice = weeks.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(
+        slice.map((w) => fetchJSON(`${API}/league/${leagueId}/matchups/${w}`).catch(() => []))
+      );
+      weekResults.push(...results);
+    }
+
+    for (const wk of weekResults) {
+      if (!Array.isArray(wk) || !wk.length) continue;
+      const byMatchup = new Map();
+      for (const entry of wk) {
+        if (entry.matchup_id == null) continue;
+        if (!byMatchup.has(entry.matchup_id)) byMatchup.set(entry.matchup_id, []);
+        byMatchup.get(entry.matchup_id).push(entry);
+      }
+      for (const pair of byMatchup.values()) {
+        if (pair.length !== 2) continue;
+        const [x, y] = pair;
+        const uX = rosterToUser.get(x.roster_id);
+        const uY = rosterToUser.get(y.roster_id);
+        if (!uX || !uY) continue;
+        const px = x.points || 0;
+        const py = y.points || 0;
+        if (px === py) {
+          bump(uX, uY, "ties");
+          bump(uY, uX, "ties");
+        } else if (px > py) {
+          bump(uX, uY, "wins");
+          bump(uY, uX, "losses");
+        } else {
+          bump(uX, uY, "losses");
+          bump(uY, uX, "wins");
+        }
+      }
+    }
+
+    try {
+      const bracket = await fetchJSON(`${API}/league/${leagueId}/winners_bracket`);
+      const seenPlayoffUsers = new Set();
+      for (const m of bracket || []) {
+        [m.t1, m.t2].forEach((rid) => {
+          if (rid == null) return;
+          const uid = rosterToUser.get(rid);
+          if (uid) seenPlayoffUsers.add(uid);
+        });
+        if (m.p === 1 && m.w != null) {
+          const champUid = rosterToUser.get(m.w);
+          const runnerUid = m.l != null ? rosterToUser.get(m.l) : null;
+          if (champUid) ensureTrophy(champUid).championships++;
+          if (runnerUid) ensureTrophy(runnerUid).runnerups++;
+        }
+        if (m.p === 3 && m.w != null) {
+          const thirdUid = rosterToUser.get(m.w);
+          if (thirdUid) ensureTrophy(thirdUid).thirds++;
+        }
+      }
+      seenPlayoffUsers.forEach((uid) => {
+        const t = ensureTrophy(uid);
+        t.playoffs++;
+        t.seasons.push(season);
+      });
+    } catch (err) {
+      console.error(`H2H: bracket failed for season ${season}`, err);
+    }
+  }
+
+  return { userInfo, records, trophies, seasonsCovered: chain.map((l) => l.season) };
+}
+
+function h2hCardHTML(c) {
+  const { info, t } = c;
+  return `
+    <div class="h2h-card" data-uid="${c.uid}" tabindex="0" role="button">
+      ${info.avatar ? `<img class="h2h-avatar" src="${info.avatar}" alt="">` : '<span class="h2h-avatar h2h-avatar-blank"></span>'}
+      <div class="h2h-name">${info.name}</div>
+      <div class="h2h-badges">
+        ${t.championships ? `<span class="h2h-badge h2h-badge-champ" title="${t.championships} Championship${t.championships > 1 ? "s" : ""}">🏆 ${t.championships}</span>` : ""}
+        ${t.runnerups ? `<span class="h2h-badge" title="${t.runnerups} Runner-up${t.runnerups > 1 ? "s" : ""}">🥈 ${t.runnerups}</span>` : ""}
+        ${t.thirds ? `<span class="h2h-badge" title="${t.thirds}× 3rd Place">🥉 ${t.thirds}</span>` : ""}
+        <span class="h2h-badge h2h-badge-muted" title="Playoff appearances">⛳ ${t.playoffs}</span>
+      </div>
+      <div class="h2h-card-hint">Click for head-to-head ▸</div>
+    </div>
+  `;
+}
+
+function openH2HDrawer(uid, data, cards) {
+  const me = cards.find((c) => c.uid === uid);
+  if (!me) return;
+  const rows = cards
+    .filter((c) => c.uid !== uid)
+    .map((opp) => ({
+      name: opp.info.name,
+      rec: data.records.get(`${uid}|${opp.uid}`) || { wins: 0, losses: 0, ties: 0 },
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const inner = $("#h2h-drawer-inner");
+  if (!inner) return;
+  inner.innerHTML = `
+    <h3 class="h2h-drawer-title">${me.info.name}</h3>
+    <p class="h2h-drawer-sub">
+      ${me.t.championships} championship${me.t.championships === 1 ? "" : "s"} ·
+      ${me.t.runnerups} runner-up${me.t.runnerups === 1 ? "" : "s"} ·
+      ${me.t.thirds} 3rd-place finish${me.t.thirds === 1 ? "" : "es"} ·
+      ${me.t.playoffs} playoff appearance${me.t.playoffs === 1 ? "" : "s"}
+      ${me.t.seasons.length ? `(${me.t.seasons.slice().sort().join(", ")})` : ""}
+    </p>
+    <table class="h2h-table">
+      <thead><tr><th>Opponent</th><th class="num">All-Time Record</th></tr></thead>
+      <tbody>
+        ${rows
+          .map(
+            (r) => `
+          <tr>
+            <td>${r.name}</td>
+            <td class="num">${r.rec.wins}-${r.rec.losses}${r.rec.ties ? `-${r.rec.ties}` : ""}</td>
+          </tr>
+        `
+          )
+          .join("")}
+      </tbody>
+    </table>
+  `;
+  const drawer = $("#h2h-drawer");
+  if (drawer) drawer.hidden = false;
+}
+
+function renderH2HPage(data) {
+  const container = $("#h2h-body");
+  if (!container) return;
+
+  const currentUserIds = Array.from(new Set(Array.from(state.rosterMap.values()).map((r) => r.ownerId)));
+  const cards = currentUserIds.map((uid) => ({
+    uid,
+    info: data.userInfo.get(uid) || { name: `Manager ${uid}`, avatar: null },
+    t: data.trophies.get(uid) || { championships: 0, runnerups: 0, thirds: 0, playoffs: 0, seasons: [] },
+  }));
+
+  const seasons = data.seasonsCovered.slice().sort();
+
+  container.innerHTML = `
+    <p class="page-sub">
+      All-time history across ${seasons.length} season${seasons.length === 1 ? "" : "s"}
+      (${seasons[0]}–${seasons[seasons.length - 1]}). Click a manager for their full head-to-head breakdown.
+    </p>
+    <div class="h2h-grid">${cards.map((c) => h2hCardHTML(c)).join("")}</div>
+    <div class="h2h-drawer" id="h2h-drawer" hidden>
+      <div class="h2h-drawer-inner" id="h2h-drawer-inner"></div>
+      <button class="h2h-drawer-close" id="h2h-drawer-close">✕ Close</button>
+    </div>
+  `;
+
+  container.querySelectorAll(".h2h-card").forEach((card) => {
+    const open = () => openH2HDrawer(card.dataset.uid, data, cards);
+    card.addEventListener("click", open);
+    card.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+    });
+  });
+  const closeBtn = $("#h2h-drawer-close");
+  if (closeBtn) closeBtn.addEventListener("click", () => { $("#h2h-drawer").hidden = true; });
+}
+
+async function loadAndRenderH2H() {
+  if (state.h2h.loaded || state.h2h.loading) return;
+  state.h2h.loading = true;
+  const container = $("#h2h-body");
+  if (container) {
+    container.innerHTML = '<div class="empty-state">Loading all-time head-to-head history (walking every season back to the league\'s founding)…</div>';
+  }
+  try {
+    const data = await buildH2HData();
+    state.h2h.data = data;
+    state.h2h.loaded = true;
+    renderH2HPage(data);
+  } catch (err) {
+    console.error("H2H load failed:", err);
+    if (container) container.innerHTML = '<div class="empty-state">Head-to-head history not available.</div>';
+  } finally {
+    state.h2h.loading = false;
+  }
+}
+
 /* ---------- Draft & FA page ---------- */
 
 const ROOKIE_SCHEDULE = [
@@ -1201,7 +1621,105 @@ const ROOKIE_SCHEDULE = [
   ["Round 4 (all picks)", "$2"],
 ];
 
-function renderDraftPage() {
+async function loadTradedPicks(season) {
+  try {
+    const picks = await fetchJSON(`${API}/league/${CFG.leagueId}/traded_picks`);
+    return picks.filter((p) => String(p.season) === String(season));
+  } catch (err) {
+    console.error("Traded picks load failed:", err);
+    return [];
+  }
+}
+
+// Builds the 4-round / 40-pick rookie draft order for next season.
+// Picks 1-4: the 4 non-playoff teams (seeds 7-10), ordered by Max PF
+// ascending (lowest Max PF picks first). Picks 5-10: the 6 playoff teams
+// (seeds 1-6), worst-seed-first (seed 6 -> pick 5 ... seed 1 -> pick 10).
+// Pick ownership is resolved against traded_picks for that season; a traded
+// pick shows the current owner with a "via <original owner>" note.
+async function buildDraftBoard() {
+  const ranked = getStandingsRanked();
+  if (!ranked.length || !state.league) return null;
+
+  const maxPF = state.standingsExtra.maxPFByRoster;
+  const playoffSeeds = ranked.slice(0, 6); // seeds 1-6, in seed order
+  const lotterySeeds = ranked.slice(6, 10); // seeds 7-10
+
+  const lotteryOrder = [...lotterySeeds].sort(
+    (a, b) => (maxPF.get(a.rid) || 0) - (maxPF.get(b.rid) || 0)
+  );
+  const playoffOrder = [...playoffSeeds].reverse(); // seed 6 first, seed 1 last
+
+  const round1Order = [...lotteryOrder, ...playoffOrder]; // 10 original-owner roster_ids, pick order
+
+  const nextSeason = String(Number(state.league.season) + 1);
+  const tradedPicks = await loadTradedPicks(nextSeason);
+  const tradeMap = new Map(); // `${round}:${roster_id}` -> owner_id
+  for (const tp of tradedPicks) {
+    tradeMap.set(`${tp.round}:${tp.roster_id}`, tp.owner_id);
+  }
+
+  const rounds = [];
+  for (let round = 1; round <= 4; round++) {
+    const picks = round1Order.map((team, idx) => {
+      const originalRid = team.rid;
+      const ownerRid = tradeMap.has(`${round}:${originalRid}`)
+        ? tradeMap.get(`${round}:${originalRid}`)
+        : originalRid;
+      const traded = ownerRid !== originalRid;
+      const owner = state.rosterMap.get(ownerRid) || state.rosterMap.get(Number(ownerRid));
+      const original = state.rosterMap.get(originalRid) || state.rosterMap.get(Number(originalRid));
+      return {
+        label: `${round}.${String(idx + 1).padStart(2, "0")}`,
+        ownerName: owner ? owner.name : `Roster ${ownerRid}`,
+        ownerAvatar: owner ? owner.avatar : null,
+        traded,
+        originalName: original ? original.name : `Roster ${originalRid}`,
+      };
+    });
+    rounds.push({ round, picks });
+  }
+
+  return { season: nextSeason, rounds };
+}
+
+function draftBoardHTML(board) {
+  if (!board) return '<div class="empty-state">Draft board not available yet.</div>';
+  return `
+    <p class="page-sub">
+      ${board.season} rookie draft order — picks 1–4 set by Max PF (lowest picks first),
+      picks 5–10 set by current playoff seed (worst seed picks first). Updates live as
+      standings and traded picks change.
+    </p>
+    <div class="draft-board">
+      ${board.rounds
+        .map(
+          (r) => `
+        <div class="draft-round">
+          <h3 class="draft-round-title">Round ${r.round}</h3>
+          <div class="draft-round-picks">
+            ${r.picks
+              .map(
+                (p) => `
+              <div class="draft-pick-card ${p.traded ? "draft-pick-traded" : ""}">
+                <span class="draft-pick-num">${p.label}</span>
+                ${p.ownerAvatar ? `<img class="draft-pick-avatar" src="${p.ownerAvatar}" alt="">` : ""}
+                <span class="draft-pick-team">${p.ownerName}</span>
+                ${p.traded ? `<span class="draft-pick-via">via ${p.originalName}</span>` : ""}
+              </div>
+            `
+              )
+              .join("")}
+          </div>
+        </div>
+      `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+async function renderDraftPage() {
   $("#rookie-schedule").innerHTML = `
     <table class="roster-table">
       <thead><tr><th>Pick</th><th>Salary</th></tr></thead>
@@ -1213,6 +1731,18 @@ function renderDraftPage() {
   const offSection = RULEBOOK_SECTIONS.find((s) => s.heading === "Off-Season Free Agency");
   const bullets = [...(faSection ? faSection.bullets : []), ...(offSection ? offSection.bullets : [])];
   $("#fa-rules").innerHTML = bullets.map((b) => `<li>${b}</li>`).join("");
+
+  const boardEl = $("#draft-board");
+  if (boardEl) {
+    boardEl.innerHTML = '<div class="empty-state">Loading draft board…</div>';
+    try {
+      const board = await buildDraftBoard();
+      boardEl.innerHTML = draftBoardHTML(board);
+    } catch (err) {
+      console.error("Draft board failed:", err);
+      boardEl.innerHTML = '<div class="empty-state">Draft board not available.</div>';
+    }
+  }
 }
 
 /* ---------- Rule Book page ---------- */
@@ -1254,6 +1784,7 @@ function initNav() {
       btn.classList.add("active");
       document.querySelectorAll(".page").forEach((p) => (p.hidden = true));
       $(`#page-${btn.dataset.page}`).hidden = false;
+      if (btn.dataset.page === "h2h") loadAndRenderH2H();
     });
   });
 }
@@ -1269,7 +1800,7 @@ async function init() {
     const maxWeek = CFG.maxWeek || (league.settings && league.settings.leg) || 18;
     const currentWeek = Math.max(1, Math.min(maxWeek, (league.settings && league.settings.leg) || maxWeek));
 
-    const [transactions, taxiEvents, sheetByRoster, pointsByPlayer, standingsExtra] = await Promise.all([
+    const [transactions, taxiEvents, sheetByRoster, statsData, standingsExtra] = await Promise.all([
       loadTransactions(maxWeek),
       loadTaxiLog(),
       SheetData.loadAll(CFG.googleSheetId, CFG.sheetTabsByRosterId, CFG.snapshotSheetName).catch((err) => {
@@ -1278,7 +1809,7 @@ async function init() {
       }),
       StatsData.loadSeasonPoints(league.season, currentWeek).catch((err) => {
         console.error("Stats load failed:", err);
-        return new Map();
+        return { totals: new Map(), weekly: new Map() };
       }),
       loadStandingsExtras(currentWeek).catch((err) => {
         console.error("Standings extras (streak/Max PF) failed:", err);
@@ -1287,7 +1818,8 @@ async function init() {
     ]);
 
     state.sheetByRoster = sheetByRoster;
-    state.pointsByPlayer = pointsByPlayer;
+    state.pointsByPlayer = statsData.totals;
+    state.weeklyPointsByPlayer = statsData.weekly;
     state.standingsExtra = standingsExtra;
 
     const liveEvents = transactionsToEvents(transactions);
@@ -1302,8 +1834,8 @@ async function init() {
     renderRostersPage();
     renderLeaderboards();
     initTradeMachine();
-    renderDraftPage();
     renderRulesPage("");
+    renderDraftPage();
   } catch (err) {
     console.error(err);
     setStatus(`Failed to load league data: ${err.message}`);
