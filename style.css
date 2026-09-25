@@ -103,6 +103,9 @@ a { color: var(--accent); }
   font-weight: 700;
   color: var(--accent);
 }
+.stat-value.deadline-passed {
+  color: var(--crimson);
+}
 
 .main-nav {
   display: flex;
@@ -849,3 +852,205 @@ select, input[type="search"] {
   padding: 1px 5px;
   border-radius: 4px;
 }
+
+/* ---------- Draft Board ---------- */
+
+.draft-board {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  margin-bottom: 28px;
+}
+
+.draft-round-title {
+  margin: 0 0 10px;
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.draft-round-picks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.draft-pick-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: relative;
+}
+
+.draft-pick-card.draft-pick-traded {
+  border-color: var(--amber);
+}
+
+.draft-pick-num {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+.draft-pick-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.draft-pick-team {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draft-pick-via {
+  font-size: 0.72rem;
+  color: var(--amber);
+}
+
+/* ---------- Head-to-Head / Trophy Room ---------- */
+
+.h2h-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.h2h-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.h2h-card:hover,
+.h2h-card:focus-visible {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  outline: none;
+}
+
+.h2h-avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.h2h-avatar-blank {
+  background: var(--panel-border);
+  display: inline-block;
+}
+
+.h2h-name {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.h2h-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.h2h-badge {
+  font-size: 0.76rem;
+  background: rgba(240, 180, 41, 0.12);
+  border: 1px solid rgba(240, 180, 41, 0.4);
+  color: var(--amber);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.h2h-badge-champ {
+  background: rgba(240, 180, 41, 0.22);
+  font-weight: 700;
+}
+
+.h2h-badge-muted {
+  background: transparent;
+  border-color: var(--panel-border);
+  color: var(--muted);
+}
+
+.h2h-card-hint {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.h2h-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  width: min(400px, 92vw);
+  background: var(--panel);
+  border-left: 1px solid var(--panel-border);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.4);
+  padding: 24px 20px;
+  overflow-y: auto;
+  z-index: 50;
+}
+
+.h2h-drawer-title {
+  margin: 0 0 6px;
+  color: var(--text);
+}
+
+.h2h-drawer-sub {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+.h2h-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.h2h-table th {
+  text-align: left;
+  color: var(--muted);
+  font-size: 0.76rem;
+  border-bottom: 1px solid var(--panel-border);
+  padding: 6px 4px;
+}
+
+.h2h-table td {
+  padding: 7px 4px;
+  border-bottom: 1px solid var(--panel-border);
+  font-size: 0.88rem;
+}
+
+.h2h-drawer-close {
+  margin-top: 18px;
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  padding: 9px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.h2h-drawer-close:hover { border-color: var(--accent); }
