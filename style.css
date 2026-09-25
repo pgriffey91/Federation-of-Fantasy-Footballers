@@ -140,6 +140,161 @@ a { color: var(--accent); }
 }
 #refresh-btn:hover { border-color: var(--accent); }
 
+#global-search-btn {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+#global-search-btn:hover { border-color: var(--accent); }
+.kbd-hint {
+  font-size: 0.72rem;
+  color: var(--muted);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* ---------- Global Search Modal ---------- */
+
+.search-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 6, 9, 0.72);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 10vh 16px 0;
+  z-index: 1000;
+}
+.search-overlay[hidden] { display: none; }
+
+.search-modal {
+  width: 100%;
+  max-width: 560px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+}
+
+.search-modal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--panel-border);
+}
+.search-icon { font-size: 1rem; }
+.search-modal-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: 1rem;
+  min-height: 44px;
+}
+.search-modal-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 1rem;
+  min-width: 44px;
+  min-height: 44px;
+}
+.search-modal-close:hover { color: var(--text); }
+
+.search-results {
+  overflow-y: auto;
+  flex: 1;
+}
+.search-result-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  min-height: 44px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--panel-border);
+}
+.search-result-row:last-child { border-bottom: none; }
+.search-result-row:hover,
+.search-result-row.search-result-active {
+  background: rgba(255, 255, 255, 0.05);
+}
+.search-result-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.search-result-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-result-pos {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.search-result-sub {
+  font-size: 0.8rem;
+  color: var(--muted);
+  flex: 1.4;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.search-result-value {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.search-modal-foot {
+  display: flex;
+  gap: 14px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--panel-border);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.search-modal-foot kbd {
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.72rem;
+}
+
+.roster-card-highlight {
+  animation: roster-card-flash 1.5s ease;
+}
+@keyframes roster-card-flash {
+  0% { box-shadow: 0 0 0 2px var(--accent); }
+  100% { box-shadow: none; }
+}
+
+@media (max-width: 600px) {
+  .search-overlay { padding-top: 0; align-items: stretch; }
+  .search-modal { max-width: none; max-height: 100vh; height: 100vh; border-radius: 0; }
+}
+
 main {
   max-width: 1080px;
   margin: 0 auto;
@@ -165,6 +320,8 @@ main {
   border-radius: var(--radius);
   padding: 18px 20px 8px;
   margin-bottom: 28px;
+  container-type: inline-size;
+  container-name: standings;
 }
 .standings-card-head {
   display: flex;
@@ -596,6 +753,14 @@ main {
 .roster-card summary { cursor: pointer; font-weight: 600; }
 
 /* Leaderboards */
+.horizon-filter-group {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  display: inline-flex;
+}
 .leaderboard-grid {
   background: var(--panel);
   border: 1px solid var(--panel-border);
@@ -1042,6 +1207,8 @@ select, input[type="search"] {
   border: 1px solid var(--panel-border);
   border-radius: var(--radius);
   margin-bottom: 10px;
+  container-type: inline-size;
+  container-name: h2hlb;
 }
 
 .h2h-lb-table {
@@ -1211,4 +1378,149 @@ select, input[type="search"] {
   margin: 0;
   padding-left: 18px;
   font-size: 0.88rem;
+}
+
+/* Responsive stacked-card tables (CSS container queries).
+ *
+ * Wide data tables (the Standings table, the Record Book leaderboard) are
+ * fine on desktop but force horizontal scrolling and tiny text on a phone.
+ * Below 768px of the table's OWN container width (not the viewport — so
+ * this still behaves correctly if one of these tables ever ends up in a
+ * narrower layout), each row becomes a stacked card instead: the header row
+ * is hidden, and every cell with a data-label attribute prints that label
+ * before its value via ::before. Cells without a data-label (the rank
+ * square, the team name/avatar block, the leaderboard's manager name) are
+ * left as the card's plain header content instead of a labeled row.
+ */
+.standings-card, .h2h-lb-wrap { container-type: inline-size; }
+
+@container standings (max-width: 768px) {
+  .standings-table-wrap { overflow-x: visible; }
+  .standings-table.responsive-stack-table { min-width: 0; width: 100%; border-spacing: 0 12px; }
+  .standings-table.responsive-stack-table thead { display: none; }
+  .standings-table.responsive-stack-table tbody tr.standings-row {
+    display: block;
+    padding: 12px 14px;
+    border: 1px solid var(--panel-border);
+    border-radius: var(--radius);
+  }
+  .standings-table.responsive-stack-table tbody tr.standings-row td:first-child,
+  .standings-table.responsive-stack-table tbody tr.standings-row td:last-child {
+    border: none;
+    border-radius: 0;
+  }
+  .standings-table.responsive-stack-table tbody td {
+    display: block;
+    width: 100%;
+    padding: 4px 0;
+    border-top: none;
+    border-bottom: none;
+  }
+  .standings-table.responsive-stack-table tbody td[data-label] {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 8px 0;
+    border-top: 1px solid var(--panel-border);
+  }
+  .standings-table.responsive-stack-table tbody td[data-label]::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .standings-table.responsive-stack-table tbody td.standings-cap-cell[data-label] {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .standings-table.responsive-stack-table tbody td.standings-caret-cell { display: none; }
+  .standings-table.responsive-stack-table tbody tr.standings-detail-row td { padding: 0; }
+}
+
+@container h2hlb (max-width: 768px) {
+  .h2h-lb-table.responsive-stack-table { white-space: normal; }
+  .h2h-lb-table.responsive-stack-table thead { display: none; }
+  .h2h-lb-table.responsive-stack-table, .h2h-lb-table.responsive-stack-table tbody {
+    display: block;
+    width: 100%;
+  }
+  .h2h-lb-table.responsive-stack-table tbody tr {
+    display: block;
+    padding: 12px 14px;
+    margin: 10px;
+    background: var(--bg);
+    border: 1px solid var(--panel-border);
+    border-radius: var(--radius);
+  }
+  .h2h-lb-table.responsive-stack-table tbody tr:hover { background: var(--bg); }
+  .h2h-lb-table.responsive-stack-table tbody td {
+    display: block;
+    width: 100%;
+    border-bottom: none;
+    padding: 4px 0;
+  }
+  .h2h-lb-table.responsive-stack-table tbody td[data-label] {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
+    padding: 6px 0;
+    border-top: 1px solid var(--panel-border);
+    text-align: right;
+  }
+  .h2h-lb-table.responsive-stack-table tbody td[data-label]::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    text-align: left;
+  }
+}
+
+/* Touch targets: on a phone, every interactive control should be at least
+ * 44x44px (the standard minimum tap-target size) so nothing requires
+ * precision-tapping — buttons, the modal close buttons, the draft-pick
+ * cards, trade-calculator player rows/checkboxes, filter pills, and form
+ * controls all get a taller hit area below 768px. Desktop sizing (a mouse
+ * doesn't need this) is untouched.
+ */
+@media (max-width: 768px) {
+  .nav-btn,
+  #refresh-btn,
+  #load-more-btn,
+  .h2h-drawer-close,
+  #draft-drawer-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 10px 16px;
+  }
+  .checkbox-pill,
+  .trade-player-row,
+  .draft-pick-card,
+  select,
+  input[type="search"],
+  input[type="text"],
+  input[type="number"] {
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+  .trade-player-check {
+    width: 22px;
+    height: 22px;
+  }
+  .lb-row,
+  .h2h-card {
+    min-height: 44px;
+  }
 }
