@@ -37,6 +37,25 @@ async function fetchJSON(url) {
   return res.json();
 }
 
+// Loads the pre-built season cache (data/season-cache.json), if present. A
+// scheduled GitHub Action (scripts/build-cache.mjs) refreshes it every 15
+// minutes with every already-completed week's transactions/stats/matchups,
+// so a normal page load can skip most of the ~3-per-week live Sleeper calls
+// that otherwise make first paint slow, especially deep into a season. It's
+// same-origin and small, so this is one fast fetch, not a slowdown — and if
+// it's missing, stale in an unusable way, or for a different league/season,
+// every caller below just falls back to fetching that data live, so the
+// site works identically without it.
+async function loadSeasonCache() {
+  try {
+    const res = await fetch("data/season-cache.json", { cache: "no-store" });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    return null;
+  }
+}
+
 function setStatus(msg) {
   $("#status-line").textContent = msg;
 }
@@ -540,13 +559,23 @@ function computeOptimalLineupPoints(playerIds, playersPoints, rosterPositions) {
 // streak and season-long "Max PF" (the points they'd have if their optimal
 // lineup — best scorer at every slot, bench included — had started every
 // week). Skips weeks that haven't been played yet (all-zero points).
-async function loadStandingsExtras(currentWeek) {
+async function loadStandingsExtras(currentWeek, cache) {
   const weeks = [];
   for (let w = 1; w <= currentWeek; w++) weeks.push(w);
 
-  const results = await Promise.allSettled(
-    weeks.map((w) => fetchJSON(`${API}/league/${CFG.leagueId}/matchups/${w}`).then((data) => ({ week: w, data })))
-  );
+  const cachedByWeek = (cache && cache.matchupsByWeek) || {};
+  const results = [];
+  const toFetch = [];
+  for (const w of weeks) {
+    if (cachedByWeek[w]) results.push({ status: "fulfilled", value: { week: w, data: cachedByWeek[w] } });
+    else toFetch.push(w);
+  }
+  if (toFetch.length) {
+    const fetched = await Promise.allSettled(
+      toFetch.map((w) => fetchJSON(`${API}/league/${CFG.leagueId}/matchups/${w}`).then((data) => ({ week: w, data })))
+    );
+    results.push(...fetched);
+  }
 
   const weeklyByRoster = new Map(); // roster_id -> [{ week, result }]
   const maxPFByRoster = new Map(); // roster_id -> total optimal points
@@ -716,13 +745,13 @@ function renderStandings() {
               <span class="standings-owner">${t.ownerDisplay}</span>
             </span>
           </td>
-          <td>${record}</td>
-          <td class="${streakClass(streak)}">${streak}</td>
-          <td>${waiver}</td>
-          <td class="num">${t.pointsFor.toFixed(2)}</td>
-          <td class="num">${t.pointsAgainst.toFixed(2)}</td>
-          <td class="num">${maxPF.toFixed(2)}</td>
-          <td class="standings-cap-cell">${capBar}</td>
+          <td data-label="W-L">${record}</td>
+          <td class="${streakClass(streak)}" data-label="Streak">${streak}</td>
+          <td data-label="Waiver Pri.">${waiver}</td>
+          <td class="num" data-label="Points For">${t.pointsFor.toFixed(2)}</td>
+          <td class="num" data-label="Points Against">${t.pointsAgainst.toFixed(2)}</td>
+          <td class="num" data-label="Max PF">${maxPF.toFixed(2)}</td>
+          <td class="standings-cap-cell" data-label="Cap Breakdown ($${CFG.hardCap})">${capBar}</td>
           <td class="standings-caret-cell"><span class="standings-caret">▾</span></td>
         </tr>
         <tr class="standings-detail-row" data-detail-for="${ridStr}" hidden>
@@ -750,7 +779,7 @@ function renderStandings() {
         </div>
       </div>
       <div class="standings-table-wrap">
-        <table class="standings-table">
+        <table class="standings-table responsive-stack-table">
           <thead>
             <tr>
               <th>Rank</th>
@@ -794,12 +823,23 @@ function renderStandings() {
 
 /* ---------- Transactions (live from Sleeper) ---------- */
 
-async function loadTransactions(maxWeek) {
+// `cache` is the optional pre-fetched data/season-cache.json (see
+// loadSeasonCache / scripts/build-cache.mjs). It only ever holds weeks that
+// were already complete when it was built, so any week present in it is
+// used as-is and everything else — including the always-changing current
+// week — is still fetched live from Sleeper exactly as before.
+async function loadTransactions(maxWeek, cache) {
   const weeks = Array.from({ length: maxWeek }, (_, i) => i + 1);
+  const cachedByWeek = (cache && cache.transactionsByWeek) || {};
   const chunks = [];
+  const toFetch = [];
+  for (const w of weeks) {
+    if (cachedByWeek[w]) chunks.push(cachedByWeek[w]);
+    else toFetch.push(w);
+  }
   const CONCURRENCY = 6;
-  for (let i = 0; i < weeks.length; i += CONCURRENCY) {
-    const slice = weeks.slice(i, i + CONCURRENCY);
+  for (let i = 0; i < toFetch.length; i += CONCURRENCY) {
+    const slice = toFetch.slice(i, i + CONCURRENCY);
     const results = await Promise.all(
       slice.map((w) =>
         fetchJSON(`${API}/league/${CFG.leagueId}/transactions/${w}`).catch(() => [])
@@ -1072,6 +1112,7 @@ function renderRostersPage() {
     if (!sheet) continue;
     const card = document.createElement("details");
     card.className = "roster-card";
+    card.id = `roster-card-${rid}`;
     card.innerHTML = `
       <summary>${teamName(Number(rid))} — <span class="muted-note">${money(sheet.cap.remainingCap)} remaining</span></summary>
       ${rosterTableHTML(sheet)}
@@ -1287,6 +1328,39 @@ function renderLeaderboards() {
         )
       )
       .join("") || '<div class="empty-state">Not enough weeks played yet to compare trends.</div>';
+
+  // Contract Horizon: every rostered player's projected 2027 keeper salary
+  // (already computed sheet-side, via the league's escalator schedule —
+  // $1-5 salaries double, $6-10 go up 75%, and so on down to +7.5% above
+  // $60, per the rulebook) against this year's salary, so owners can see
+  // who gets expensive before the offseason. This format has no fixed
+  // contract lengths — every player renews at the escalator rate or gets
+  // cut each year — so there's no real "expiring" subset to filter to;
+  // instead this filters by how big next year's raise is.
+  const horizonAll = entries
+    .filter((p) => p.keeper2027 > 0)
+    .map((p) => ({ ...p, increase: p.keeper2027 - p.salary }))
+    .sort((a, b) => b.increase - a.increase);
+
+  const renderHorizon = () => {
+    const filterEl = $("#horizon-filter");
+    const minIncrease = Number((filterEl && filterEl.value) || 0);
+    const rows = horizonAll.filter((p) => p.increase >= minIncrease).slice(0, 25);
+    $("#lb-horizon").innerHTML =
+      rows
+        .map((p, i) =>
+          leaderboardRowHTML(
+            i + 1,
+            `${p.name} (${p.pos})`,
+            `${teamName(p.rosterId)} · ${money(p.salary)} → ${money(p.keeper2027)} in 2027`,
+            `+${money(p.increase)}`
+          )
+        )
+        .join("") || '<div class="empty-state">No players meet that threshold.</div>';
+  };
+  renderHorizon();
+  const horizonFilterEl = $("#horizon-filter");
+  if (horizonFilterEl) horizonFilterEl.addEventListener("change", renderHorizon);
 
   // Most active traders: trade-event count per roster, this season.
   const tradeCounts = new Map();
@@ -1797,15 +1871,15 @@ function h2hLeaderboardHTML(cards) {
       return `
         <tr>
           <td class="h2h-lb-name">${c.info.name}</td>
-          <td class="num">${record}</td>
-          <td class="num">${lb.top3Seasons}</td>
-          <td class="num">${c.t.playoffs}</td>
-          <td class="num">${c.t.championships}</td>
-          <td class="num">${finals}</td>
-          <td class="num">${lb.firstSeedSeasons}</td>
-          <td class="num">${lb.trades}</td>
-          <td class="num">${conversion}</td>
-          <td class="num">${efficiency}</td>
+          <td class="num" data-label="Record">${record}</td>
+          <td class="num" data-label="Top-3 Scoring">${lb.top3Seasons}</td>
+          <td class="num" data-label="Playoffs">${c.t.playoffs}</td>
+          <td class="num" data-label="Titles">${c.t.championships}</td>
+          <td class="num" data-label="Finals">${finals}</td>
+          <td class="num" data-label="#1 Seeds">${lb.firstSeedSeasons}</td>
+          <td class="num" data-label="Trades">${lb.trades}</td>
+          <td class="num" data-label="Pick Conversion">${conversion}</td>
+          <td class="num" data-label="Lineup Efficiency">${efficiency}</td>
         </tr>
       `;
     })
@@ -1813,7 +1887,7 @@ function h2hLeaderboardHTML(cards) {
 
   return `
     <div class="h2h-lb-wrap">
-      <table class="h2h-lb-table">
+      <table class="h2h-lb-table responsive-stack-table">
         <thead>
           <tr>
             <th>Manager</th>
@@ -2544,6 +2618,212 @@ function renderRulesPage(query) {
     .join("") || '<div class="empty-state">No matching rules.</div>';
 }
 
+/* ---------- Global Search ---------- */
+
+// Fantasy-relevant positions only — Sleeper's player DB also has coaches,
+// long-retired players, and practice-squad-only guys with no fantasy value,
+// none of which belong in a "who's available" search.
+const SEARCH_POSITIONS = new Set(["QB", "RB", "WR", "TE", "K", "DEF"]);
+
+let searchFuse = null;
+let searchHits = [];
+let searchActiveIndex = -1;
+
+// Builds the search index fresh from whatever's currently in state: every
+// rostered player (active/taxi/IR, with team/salary/next-year salary from
+// the sheet) plus every real skill-position NFL player who isn't on any
+// roster, surfaced as a free agent. This cap format has no pre-set price for
+// free agents, so they're shown without a salary rather than a fabricated one.
+function buildSearchIndex() {
+  const rosteredByName = new Map();
+
+  for (const rid of Object.keys(state.sheetByRoster)) {
+    const sheet = state.sheetByRoster[rid];
+    const addSection = (rows, section) => {
+      for (const p of rows || []) {
+        rosteredByName.set(SheetData.normalizeName(p.name), {
+          name: p.name,
+          pos: p.pos,
+          salary: p.salary,
+          keeper2027: p.keeper2027,
+          rosterId: Number(rid),
+          section,
+          status: "rostered",
+        });
+      }
+    };
+    addSection(sheet.activeRoster, "Active Roster");
+    addSection(sheet.taxiSquad, "Taxi Squad");
+    addSection(sheet.ir, "Injured Reserve");
+  }
+
+  const freeAgents = [];
+  for (const p of state.players.values()) {
+    if (!SEARCH_POSITIONS.has(p.pos)) continue;
+    const norm = SheetData.normalizeName(p.name);
+    if (!norm || rosteredByName.has(norm)) continue;
+    freeAgents.push({ name: p.name, pos: p.pos, nflTeam: p.team, status: "free-agent" });
+  }
+
+  searchIndexData = [...rosteredByName.values(), ...freeAgents];
+  if (typeof Fuse === "undefined") {
+    searchFuse = null;
+    return;
+  }
+  searchFuse = new Fuse(searchIndexData, { keys: ["name"], threshold: 0.35, minMatchCharLength: 2 });
+}
+
+let searchIndexData = [];
+
+function searchResultRowHTML(entry, idx) {
+  let sub, value;
+  if (entry.status === "rostered") {
+    sub = `${teamName(entry.rosterId)} · ${entry.section}`;
+    value = entry.salary > 0
+      ? `${money(entry.salary)}${entry.keeper2027 > 0 ? ` → ${money(entry.keeper2027)} '27` : ""}`
+      : "—";
+  } else {
+    sub = `Free agent · ${entry.nflTeam || "FA"}`;
+    value = "No contract";
+  }
+  return `
+    <div class="search-result-row${idx === searchActiveIndex ? " search-result-active" : ""}" data-idx="${idx}">
+      <span class="search-result-main">
+        <span class="search-result-name">${entry.name}</span>
+        <span class="search-result-pos">${entry.pos || ""}</span>
+      </span>
+      <span class="search-result-sub">${sub}</span>
+      <span class="search-result-value">${value}</span>
+    </div>
+  `;
+}
+
+function renderSearchHitList() {
+  const resultsEl = $("#search-results");
+  if (!resultsEl) return;
+  resultsEl.innerHTML =
+    searchHits.map((entry, i) => searchResultRowHTML(entry, i)).join("") ||
+    '<div class="empty-state">No players found.</div>';
+  resultsEl.querySelectorAll(".search-result-row").forEach((row) => {
+    row.addEventListener("click", () => selectSearchResult(Number(row.dataset.idx)));
+  });
+}
+
+function runSearch(query) {
+  const resultsEl = $("#search-results");
+  if (!query || !query.trim()) {
+    searchHits = [];
+    searchActiveIndex = -1;
+    if (resultsEl) resultsEl.innerHTML = '<div class="empty-state">Start typing a player name…</div>';
+    return;
+  }
+  if (!searchFuse) {
+    if (resultsEl) resultsEl.innerHTML = '<div class="empty-state">Search index still loading…</div>';
+    return;
+  }
+  searchHits = searchFuse.search(query, { limit: 20 }).map((h) => h.item);
+  searchActiveIndex = searchHits.length ? 0 : -1;
+  renderSearchHitList();
+}
+
+function selectSearchResult(idx) {
+  const entry = searchHits[idx];
+  if (!entry) return;
+  closeSearchModal();
+  if (entry.status !== "rostered") return; // free agents have no team page to jump to
+  document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
+  const rostersBtn = document.querySelector('.nav-btn[data-page="rosters"]');
+  if (rostersBtn) rostersBtn.classList.add("active");
+  document.querySelectorAll(".page").forEach((p) => (p.hidden = true));
+  const rostersPage = $("#page-rosters");
+  if (rostersPage) rostersPage.hidden = false;
+  const card = $(`#roster-card-${entry.rosterId}`);
+  if (card) {
+    card.open = true;
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    card.classList.add("roster-card-highlight");
+    setTimeout(() => card.classList.remove("roster-card-highlight"), 1500);
+  }
+}
+
+function openSearchModal() {
+  const overlay = $("#search-overlay");
+  const input = $("#global-search-input");
+  if (!overlay || !input) return;
+  if (!searchFuse) buildSearchIndex();
+  overlay.hidden = false;
+  input.value = "";
+  runSearch("");
+  setTimeout(() => input.focus(), 0);
+}
+
+function closeSearchModal() {
+  const overlay = $("#search-overlay");
+  if (overlay) overlay.hidden = true;
+}
+
+function initGlobalSearch() {
+  const openBtn = $("#global-search-btn");
+  const closeBtn = $("#search-modal-close");
+  const overlay = $("#search-overlay");
+  const input = $("#global-search-input");
+
+  if (openBtn) openBtn.addEventListener("click", openSearchModal);
+  if (closeBtn) closeBtn.addEventListener("click", closeSearchModal);
+  if (overlay) {
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) closeSearchModal();
+    });
+  }
+  if (input) {
+    input.addEventListener("input", () => {
+      clearTimeout(window.__globalSearchDebounce);
+      window.__globalSearchDebounce = setTimeout(() => runSearch(input.value), 120);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (searchHits.length) {
+          searchActiveIndex = Math.min(searchActiveIndex + 1, searchHits.length - 1);
+          renderSearchHitList();
+        }
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        if (searchHits.length) {
+          searchActiveIndex = Math.max(searchActiveIndex - 1, 0);
+          renderSearchHitList();
+        }
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (searchActiveIndex >= 0) selectSearchResult(searchActiveIndex);
+      } else if (e.key === "Escape") {
+        closeSearchModal();
+      }
+    });
+  }
+
+  document.addEventListener("keydown", (e) => {
+    const overlayOpen = overlay && !overlay.hidden;
+    const cmdK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k";
+    if (cmdK) {
+      e.preventDefault();
+      if (overlayOpen) closeSearchModal();
+      else openSearchModal();
+      return;
+    }
+    if (e.key === "/" && !overlayOpen) {
+      const tag = (document.activeElement && document.activeElement.tagName) || "";
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      e.preventDefault();
+      openSearchModal();
+      return;
+    }
+    if (e.key === "Escape" && overlayOpen) {
+      closeSearchModal();
+    }
+  });
+}
+
 /* ---------- Nav ---------- */
 
 function initNav() {
@@ -2564,24 +2844,38 @@ function initNav() {
 async function init() {
   try {
     setStatus("Loading league info…");
-    const [league] = await Promise.all([loadLeagueShell(), loadPlayers()]);
+    const [league, , seasonCacheRaw] = await Promise.all([loadLeagueShell(), loadPlayers(), loadSeasonCache()]);
+
+    // Only trust the cache if it's for this exact league and season — a fork
+    // pointed at a different league, or a cache left over from last year,
+    // must never leak into this season's numbers.
+    const seasonCache =
+      seasonCacheRaw &&
+      String(seasonCacheRaw.leagueId) === String(CFG.leagueId) &&
+      String(seasonCacheRaw.season) === String(league.season)
+        ? seasonCacheRaw
+        : null;
+    if (seasonCache) {
+      const ageMin = Math.round((Date.now() - (seasonCache.generatedAt || 0)) / 60000);
+      console.log(`Using season cache (built ${ageMin}m ago; live-fetching the current week on top of it).`);
+    }
 
     setStatus("Loading transactions, taxi log, and salary sheet…");
     const maxWeek = CFG.maxWeek || (league.settings && league.settings.leg) || 18;
     const currentWeek = Math.max(1, Math.min(maxWeek, (league.settings && league.settings.leg) || maxWeek));
 
     const [transactions, taxiEvents, sheetByRoster, statsData, standingsExtra] = await Promise.all([
-      loadTransactions(maxWeek),
+      loadTransactions(maxWeek, seasonCache),
       loadTaxiLog(),
       SheetData.loadAll(CFG.googleSheetId, CFG.sheetTabsByRosterId, CFG.snapshotSheetName).catch((err) => {
         console.error("Sheet load failed:", err);
         return {};
       }),
-      StatsData.loadSeasonPoints(league.season, currentWeek).catch((err) => {
+      StatsData.loadSeasonPoints(league.season, currentWeek, seasonCache).catch((err) => {
         console.error("Stats load failed:", err);
         return { totals: new Map(), weekly: new Map(), gamesPlayed: new Map() };
       }),
-      loadStandingsExtras(currentWeek).catch((err) => {
+      loadStandingsExtras(currentWeek, seasonCache).catch((err) => {
         console.error("Standings extras (streak/Max PF) failed:", err);
         return { streakByRoster: new Map(), maxPFByRoster: new Map() };
       }),
@@ -2608,6 +2902,7 @@ async function init() {
     initTradeMachine();
     renderRulesPage("");
     renderDraftPage();
+    buildSearchIndex();
   } catch (err) {
     console.error(err);
     setStatus(`Failed to load league data: ${err.message}`);
@@ -2616,6 +2911,7 @@ async function init() {
 
 document.addEventListener("DOMContentLoaded", () => {
   initNav();
+  initGlobalSearch();
   init();
 
   $("#team-filter").addEventListener("change", applyFilters);
