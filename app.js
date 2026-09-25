@@ -572,8 +572,15 @@ async function loadStandingsExtras(currentWeek) {
       let result = null;
       if (group.length === 2) {
         const [a, b] = group;
-        if (a.points === b.points) result = "T";
-        else result = (a.points > b.points ? a.roster_id : b.roster_id) === rid ? "W" : "L";
+        // A week is only skipped above if EVERY matchup that week is still
+        // scoreless — but during the current week, some pairings may have
+        // started while this specific one hasn't (e.g. both teams' players
+        // are all in a Monday night game). Both sides show 0-0 then, which
+        // trivially looks like a tie unless it's excluded here too.
+        if (a.points > 0 || b.points > 0) {
+          if (a.points === b.points) result = "T";
+          else result = (a.points > b.points ? a.roster_id : b.roster_id) === rid ? "W" : "L";
+        }
       }
       if (result) {
         if (!weeklyByRoster.has(rid)) weeklyByRoster.set(rid, []);
