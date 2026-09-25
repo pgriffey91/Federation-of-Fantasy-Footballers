@@ -1,0 +1,38 @@
+name: Update season data cache
+
+on:
+  schedule:
+    # Every 15 minutes. GitHub may delay scheduled runs slightly under load,
+    # especially at the top of the hour. This only speeds up page loads (see
+    # scripts/build-cache.mjs) — nothing depends on it running on the dot,
+    # and the site works fine (just a bit slower) if a run is skipped.
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build season data cache
+        run: node scripts/build-cache.mjs
+
+      - name: Commit changes if any
+        run: |
+          git config user.name "season-cache-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/season-cache.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Update season data cache [automated]"
+            git push
+          fi
