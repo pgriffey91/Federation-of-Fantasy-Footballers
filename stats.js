@@ -12,7 +12,14 @@
 const StatsData = (() => {
   const API = "https://api.sleeper.app/v1";
 
-  async function loadSeasonPoints(season, maxWeek) {
+  // `cache` is the optional pre-fetched data/season-cache.json (built on a
+  // schedule by scripts/build-cache.mjs — see README). It only ever contains
+  // weeks that were already complete when it was generated, so any week
+  // present in it is safe to use as-is; anything missing (the in-progress
+  // current week, or a week the cache hasn't caught up to yet) is fetched
+  // live exactly as before. This is what makes page loads fast without ever
+  // risking a stale in-progress score.
+  async function loadSeasonPoints(season, maxWeek, cache) {
     const weeks = Array.from({ length: maxWeek }, (_, i) => i + 1);
     const totals = new Map(); // player_id -> total pts_half_ppr
     const weekly = new Map(); // player_id -> Map(week -> pts_half_ppr), used for trend leaderboards
@@ -24,9 +31,26 @@ const StatsData = (() => {
     // leaderboard.
     const gamesPlayed = new Map(); // player_id -> count of weeks with gp === 1
 
+    const applyWeek = (week, data) => {
+      for (const [playerId, stat] of Object.entries(data || {})) {
+        if (!stat || typeof stat.pts_half_ppr !== "number") continue;
+        totals.set(playerId, (totals.get(playerId) || 0) + stat.pts_half_ppr);
+        if (!weekly.has(playerId)) weekly.set(playerId, new Map());
+        weekly.get(playerId).set(week, stat.pts_half_ppr);
+        if (stat.gp === 1) gamesPlayed.set(playerId, (gamesPlayed.get(playerId) || 0) + 1);
+      }
+    };
+
+    const cachedByWeek = (cache && cache.statsByWeek) || {};
+    const toFetch = [];
+    for (const w of weeks) {
+      if (cachedByWeek[w]) applyWeek(w, cachedByWeek[w]);
+      else toFetch.push(w);
+    }
+
     const CONCURRENCY = 6;
-    for (let i = 0; i < weeks.length; i += CONCURRENCY) {
-      const slice = weeks.slice(i, i + CONCURRENCY);
+    for (let i = 0; i < toFetch.length; i += CONCURRENCY) {
+      const slice = toFetch.slice(i, i + CONCURRENCY);
       const results = await Promise.all(
         slice.map((w) =>
           fetch(`${API}/stats/nfl/regular/${season}/${w}`)
@@ -35,15 +59,7 @@ const StatsData = (() => {
             .catch(() => ({ week: w, data: {} }))
         )
       );
-      for (const { week, data } of results) {
-        for (const [playerId, stat] of Object.entries(data || {})) {
-          if (!stat || typeof stat.pts_half_ppr !== "number") continue;
-          totals.set(playerId, (totals.get(playerId) || 0) + stat.pts_half_ppr);
-          if (!weekly.has(playerId)) weekly.set(playerId, new Map());
-          weekly.get(playerId).set(week, stat.pts_half_ppr);
-          if (stat.gp === 1) gamesPlayed.set(playerId, (gamesPlayed.get(playerId) || 0) + 1);
-        }
-      }
+      for (const { week, data } of results) applyWeek(week, data);
     }
     return { totals, weekly, gamesPlayed };
   }
