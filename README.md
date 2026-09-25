@@ -23,6 +23,20 @@ a searchable rule book. Built to be hosted for free on GitHub Pages.
   the source of truth — the site just mirrors it. This means the site is
   only as current as the sheet: if a manager forgets to update it after a
   drop or trade, the site will show stale numbers until it's updated.
+- **Page-load speed**: transactions, player stats, and matchups are each
+  fetched per-week from Sleeper, and by midseason that's dozens of live API
+  calls on every single page load. A scheduled job
+  (`.github/workflows/update-cache.yml`) runs `scripts/build-cache.mjs`
+  every 15 minutes and commits `data/season-cache.json`, holding every
+  already-completed week's data (a played week never changes, so it's safe
+  to serve from a file that's a few minutes stale). The site fetches that
+  one small same-origin file first, uses it for every week it covers, and
+  only ever live-fetches the current, possibly in-progress week itself — so
+  in-progress scores are never stale, but the site isn't re-fetching the
+  whole season's history from Sleeper on every visit. If the cache file is
+  missing, stale for the wrong season, or the job stops running, the site
+  quietly falls back to fetching everything live like it always did — this
+  is purely a speed optimization, nothing depends on it.
 - **"Best Value" leaderboard** uses Sleeper's built-in half-PPR season point
   totals per player, divided by salary. It's an approximation — a ranking
   tool, not a recreation of your league's exact weekly scoring.
@@ -51,15 +65,18 @@ a searchable rule book. Built to be hosted for free on GitHub Pages.
    branch" → pick `main` and `/ (root)`. Save. Your site will be live at
    `https://<your-username>.github.io/<repo-name>/` within a minute or two.
 5. **Enable Actions** (usually on by default): repo Settings → Actions →
-   General → allow workflows to run. The taxi-tracker workflow needs
-   "Read and write permissions" for `GITHUB_TOKEN` — check Settings →
-   Actions → General → Workflow permissions, and set it to "Read and write
-   permissions" so it can commit the log file back to the repo.
+   General → allow workflows to run. Both scheduled workflows need "Read and
+   write permissions" for `GITHUB_TOKEN` — check Settings → Actions →
+   General → Workflow permissions, and set it to "Read and write
+   permissions" so they can commit their files back to the repo.
 6. Trigger the taxi tracker once by hand: Actions tab →
    "Track taxi squad moves" → Run workflow. Its first run just records a
    baseline snapshot (no events yet, since there's nothing to diff against);
    from the second run onward, any taxi moves since the last poll show up
    in the feed.
+7. Trigger the season cache once by hand too: Actions tab → "Update season
+   data cache" → Run workflow. This writes `data/season-cache.json`; after
+   that it keeps itself updated every 15 minutes on its own.
 
 ## Pages
 
@@ -88,7 +105,12 @@ a searchable rule book. Built to be hosted for free on GitHub Pages.
   instead to filter out injured/inactive players who scored 0 points because
   they never suited up — a player needs at least half of the season's weeks
   played so far (minimum 1) to qualify, so the list reflects underperformance
-  rather than unavailability.
+  rather than unavailability. Also includes a Contract Horizon table: every
+  rostered player's projected 2027 salary if kept, using the sheet's
+  already-computed keeper-escalator column, filterable by how big next
+  year's raise is. This format has no fixed contract lengths (every player
+  renews at the escalator rate or gets cut each offseason), so there's no
+  real "expiring contract" subset — the filter is by raise size instead.
 - **Trade Machine** — pick two teams, select players to send each way, set
   retained salary, see the resulting cap space.
 - **Draft & FA** — a live 4-round/40-pick Draft Board for next season (picks
@@ -104,10 +126,10 @@ a searchable rule book. Built to be hosted for free on GitHub Pages.
   a pick (and cached after that), so it doesn't slow down the page otherwise.
   If a trade also moved a pick from a season whose draft has already
   happened (e.g. a 2026 pick, dealt in an earlier trade), that line shows
-  who it turned into ("2026 3rd-round pick (Team's) — became Player Name")
-  by matching the pick's original draft slot against that season's actual
-  Sleeper draft results. Plus the rookie salary schedule and free-agency/
-  waiver rules.
+  who the pick turned into instead of the owner's name ("2026 3rd-round
+  pick — Player Name") by matching the pick's original draft slot against
+  that season's actual Sleeper draft results. Plus the rookie salary
+  schedule and free-agency/waiver rules.
 - **Record Book** — a career leaderboard table (record, top-3-scoring
   seasons, playoff appearances, titles, championship-game appearances, #1
   seeds, trades, rookie-Draft-Pick Conversion Rate, and Lineup Efficiency —
@@ -133,11 +155,40 @@ a searchable rule book. Built to be hosted for free on GitHub Pages.
   first visit too.
 - **Rule Book** — the full rulebook with a live search box.
 
+## Global player search
+
+Press **⌘K** / **Ctrl+K** (or **/** when focus isn't already in a text
+field) anywhere on the site, or tap the "🔍 Search" button in the header, to
+open a fuzzy player search (powered by [Fuse.js](https://www.fusejs.org/),
+loaded from a CDN). It indexes every rostered player (with team, salary, and
+next year's keeper price) plus every real skill-position NFL player who
+isn't on a roster, shown as a free agent (this cap format has no pre-set
+free-agent price, so those show without a salary rather than a fabricated
+one). Selecting a rostered player's result jumps to their team's card on
+League Rosters and expands it.
+
+## Mobile layout
+
+Below 768px, the Standings and Record Book tables switch from a wide grid to
+stacked cards (each row's labels move inline via CSS container queries, so
+this responds to the table's own container width, not just the viewport).
+Every interactive control — nav buttons, the search bar and its results,
+modal close buttons — keeps at least a 44×44px touch target.
+
 ## Adjusting things later
 
 - **Poll frequency**: edit the `cron` line in
   `.github/workflows/track-taxi.yml`. GitHub's minimum practical interval is
   about 5 minutes, but every 1–3 hours is plenty for taxi moves.
+- **Season cache frequency**: edit the `cron` line in
+  `.github/workflows/update-cache.yml` (default every 15 minutes). It only
+  ever rewrites already-completed weeks, so running it less often just means
+  a slightly longer window where the latest completed week is still being
+  fetched live instead of from cache — never stale or wrong data, just a bit
+  slower to catch up. If your league goes fully dormant in the off-season,
+  you can disable this workflow (Actions tab → "Update season data cache" →
+  "···" → Disable workflow) to save Actions minutes; the site works fine
+  without it either way.
 - **Season length**: `config.js`'s `maxWeek` controls how many weeks of
   transactions/stats the site pulls (default 18, covering regular season +
   playoffs).
