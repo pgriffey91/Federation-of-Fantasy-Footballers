@@ -24,6 +24,7 @@ const state = {
   rosterPositions: [], // league's starting-lineup slot list (e.g. ["QB","RB","RB","WR","WR","TE","FLEX","DEF","K","BN",...])
   standingsExtra: { streakByRoster: new Map(), maxPFByRoster: new Map() },
   h2h: { loaded: false, loading: false, data: null }, // all-time head-to-head + trophy room (lazy-loaded)
+  onThisDay: { loaded: false, loading: false, data: null }, // trades + drafts on this calendar day, any season (lazy-loaded)
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -1612,6 +1613,218 @@ async function loadAndRenderH2H() {
   }
 }
 
+/* ---------- On This Day (lazy-loaded) ---------- */
+
+// Walks the full season chain looking for trades and draft results that
+// happened on today's calendar date (month + day, any year). Every trade
+// counts as "big" per league consensus — no size filter beyond "it happened."
+async function buildOnThisDayData() {
+  const chain = await collectSeasonChain();
+  const today = new Date();
+  const todayMonth = today.getMonth();
+  const todayDate = today.getDate();
+  const CONCURRENCY = 6;
+
+  const trades = [];
+  const drafts = [];
+
+  for (const league of chain) {
+    const leagueId = league.league_id;
+    const season = league.season;
+    let users, rosters;
+    try {
+      [users, rosters] = await Promise.all([
+        fetchJSON(`${API}/league/${leagueId}/users`),
+        fetchJSON(`${API}/league/${leagueId}/rosters`),
+      ]);
+    } catch (err) {
+      console.error(`On This Day: users/rosters failed for season ${season}`, err);
+      continue;
+    }
+
+    const userMap = new Map(users.map((u) => [u.user_id, u]));
+    const rosterName = new Map();
+    for (const r of rosters) {
+      const u = userMap.get(r.owner_id) || {};
+      rosterName.set(r.roster_id, (u.metadata && u.metadata.team_name) || u.display_name || `Roster ${r.roster_id}`);
+    }
+
+    // Trades: scan every week's transactions for this season.
+    const maxWeek = CFG.maxWeek || 18;
+    const weeks = Array.from({ length: maxWeek }, (_, i) => i + 1);
+    const weekTx = [];
+    for (let i = 0; i < weeks.length; i += CONCURRENCY) {
+      const slice = weeks.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(
+        slice.map((w) => fetchJSON(`${API}/league/${leagueId}/transactions/${w}`).catch(() => []))
+      );
+      weekTx.push(...results.flat());
+    }
+
+    const seenTradeIds = new Set();
+    for (const tx of weekTx) {
+      if (tx.type !== "trade" || tx.status !== "complete") continue;
+      if (seenTradeIds.has(tx.transaction_id)) continue;
+      seenTradeIds.add(tx.transaction_id);
+
+      const ts = tx.status_updated || tx.created;
+      if (!ts) continue;
+      const d = new Date(ts);
+      if (d.getMonth() !== todayMonth || d.getDate() !== todayDate) continue;
+
+      const rosterIds = tx.roster_ids || [];
+      const gains = new Map();
+      for (const rid of rosterIds) gains.set(rid, []);
+      for (const [pid, rid] of Object.entries(tx.adds || {})) {
+        if (!gains.has(rid)) gains.set(rid, []);
+        gains.get(rid).push(playerLabel(pid));
+      }
+      for (const pick of tx.draft_picks || []) {
+        const toRoster = pick.owner_id;
+        if (!gains.has(toRoster)) gains.set(toRoster, []);
+        const round = pick.round;
+        const suffix = round === 1 ? "st" : round === 2 ? "nd" : round === 3 ? "rd" : "th";
+        const fromName = rosterName.get(pick.roster_id) || `Roster ${pick.roster_id}`;
+        gains.get(toRoster).push(`${pick.season} ${round}${suffix}-round pick (${fromName}'s)`);
+      }
+      for (const move of tx.waiver_budget || []) {
+        if (!gains.has(move.receiver)) gains.set(move.receiver, []);
+        gains.get(move.receiver).push(`$${move.amount} FAAB`);
+      }
+
+      const teams = Array.from(gains.entries()).map(([rid, items]) => ({
+        name: rosterName.get(rid) || `Roster ${rid}`,
+        gained: items.length ? items : ["nothing notable"],
+      }));
+
+      trades.push({ season, date: d, teams });
+    }
+
+    // Draft results: any draft (startup or rookie) that ran on this calendar day.
+    try {
+      const seasonDrafts = await fetchJSON(`${API}/league/${leagueId}/drafts`);
+      for (const draft of seasonDrafts || []) {
+        const ts = draft.start_time || draft.last_picked;
+        if (!ts) continue;
+        const d = new Date(ts);
+        if (d.getMonth() !== todayMonth || d.getDate() !== todayDate) continue;
+
+        let picks = [];
+        try {
+          picks = await fetchJSON(`${API}/draft/${draft.draft_id}/picks`);
+        } catch (err) {
+          console.error(`On This Day: draft picks failed for season ${season}`, err);
+          continue;
+        }
+        if (!picks || !picks.length) continue;
+
+        const teamCount = rosters.length || 10;
+        const pickRows = [...picks]
+          .sort((a, b) => a.pick_no - b.pick_no)
+          .map((p) => {
+            const slot = ((p.pick_no - 1) % teamCount) + 1;
+            const meta = p.metadata || {};
+            const playerName = p.player_id
+              ? playerLabel(p.player_id)
+              : [meta.first_name, meta.last_name].filter(Boolean).join(" ") || "—";
+            return {
+              label: `${p.round}.${String(slot).padStart(2, "0")}`,
+              team: rosterName.get(p.roster_id) || `Roster ${p.roster_id}`,
+              player: playerName,
+            };
+          });
+
+        drafts.push({ season, date: d, draftType: draft.type || "draft", picks: pickRows });
+      }
+    } catch (err) {
+      console.error(`On This Day: drafts failed for season ${season}`, err);
+    }
+  }
+
+  trades.sort((a, b) => Number(b.season) - Number(a.season));
+  drafts.sort((a, b) => Number(b.season) - Number(a.season));
+
+  return {
+    trades,
+    drafts,
+    todayLabel: today.toLocaleDateString(undefined, { month: "long", day: "numeric" }),
+  };
+}
+
+function onThisDayHTML(data) {
+  if (!data.trades.length && !data.drafts.length) {
+    return `<div class="empty-state">Nothing on record happened on ${data.todayLabel} across ${data.trades.length ? "" : "any"} league history — check back tomorrow.</div>`;
+  }
+
+  const tradeCards = data.trades
+    .map(
+      (t) => `
+    <div class="otd-card">
+      <div class="otd-card-head">
+        <span class="otd-badge otd-badge-trade">🔁 Trade</span>
+        <span class="otd-year">${t.season}</span>
+      </div>
+      <div class="otd-trade-teams">
+        ${t.teams
+          .map(
+            (team) => `
+          <div class="otd-trade-team">
+            <div class="otd-trade-team-name">${team.name}</div>
+            <div class="otd-trade-arrow">received</div>
+            <ul class="otd-trade-gains">${team.gained.map((g) => `<li>${g}</li>`).join("")}</ul>
+          </div>
+        `
+          )
+          .join("")}
+      </div>
+    </div>
+  `
+    )
+    .join("");
+
+  const draftCards = data.drafts
+    .map(
+      (dr) => `
+    <div class="otd-card">
+      <div class="otd-card-head">
+        <span class="otd-badge otd-badge-draft">📋 Draft</span>
+        <span class="otd-year">${dr.season}</span>
+      </div>
+      <table class="roster-table">
+        <thead><tr><th>Pick</th><th>Team</th><th>Player</th></tr></thead>
+        <tbody>${dr.picks.map((p) => `<tr><td>${p.label}</td><td>${p.team}</td><td>${p.player}</td></tr>`).join("")}</tbody>
+      </table>
+    </div>
+  `
+    )
+    .join("");
+
+  return `
+    <p class="page-sub">Everything on record that happened on ${data.todayLabel} across ${CFG.siteName || "league"} history.</p>
+    <div class="otd-list">${tradeCards}${draftCards}</div>
+  `;
+}
+
+async function loadAndRenderOnThisDay() {
+  if (state.onThisDay.loaded || state.onThisDay.loading) return;
+  state.onThisDay.loading = true;
+  const container = $("#otd-body");
+  if (container) {
+    container.innerHTML = '<div class="empty-state">Checking every season for what happened on this day…</div>';
+  }
+  try {
+    const data = await buildOnThisDayData();
+    state.onThisDay.data = data;
+    state.onThisDay.loaded = true;
+    if (container) container.innerHTML = onThisDayHTML(data);
+  } catch (err) {
+    console.error("On This Day load failed:", err);
+    if (container) container.innerHTML = '<div class="empty-state">On This Day history not available.</div>';
+  } finally {
+    state.onThisDay.loading = false;
+  }
+}
+
 /* ---------- Draft & FA page ---------- */
 
 const ROOKIE_SCHEDULE = [
@@ -1785,6 +1998,7 @@ function initNav() {
       document.querySelectorAll(".page").forEach((p) => (p.hidden = true));
       $(`#page-${btn.dataset.page}`).hidden = false;
       if (btn.dataset.page === "h2h") loadAndRenderH2H();
+      if (btn.dataset.page === "otd") loadAndRenderOnThisDay();
     });
   });
 }
