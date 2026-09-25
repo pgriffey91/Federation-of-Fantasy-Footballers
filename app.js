@@ -1329,39 +1329,6 @@ function renderLeaderboards() {
       )
       .join("") || '<div class="empty-state">Not enough weeks played yet to compare trends.</div>';
 
-  // Contract Horizon: every rostered player's projected 2027 keeper salary
-  // (already computed sheet-side, via the league's escalator schedule —
-  // $1-5 salaries double, $6-10 go up 75%, and so on down to +7.5% above
-  // $60, per the rulebook) against this year's salary, so owners can see
-  // who gets expensive before the offseason. This format has no fixed
-  // contract lengths — every player renews at the escalator rate or gets
-  // cut each year — so there's no real "expiring" subset to filter to;
-  // instead this filters by how big next year's raise is.
-  const horizonAll = entries
-    .filter((p) => p.keeper2027 > 0)
-    .map((p) => ({ ...p, increase: p.keeper2027 - p.salary }))
-    .sort((a, b) => b.increase - a.increase);
-
-  const renderHorizon = () => {
-    const filterEl = $("#horizon-filter");
-    const minIncrease = Number((filterEl && filterEl.value) || 0);
-    const rows = horizonAll.filter((p) => p.increase >= minIncrease).slice(0, 25);
-    $("#lb-horizon").innerHTML =
-      rows
-        .map((p, i) =>
-          leaderboardRowHTML(
-            i + 1,
-            `${p.name} (${p.pos})`,
-            `${teamName(p.rosterId)} · ${money(p.salary)} → ${money(p.keeper2027)} in 2027`,
-            `+${money(p.increase)}`
-          )
-        )
-        .join("") || '<div class="empty-state">No players meet that threshold.</div>';
-  };
-  renderHorizon();
-  const horizonFilterEl = $("#horizon-filter");
-  if (horizonFilterEl) horizonFilterEl.addEventListener("change", renderHorizon);
-
   // Most active traders: trade-event count per roster, this season.
   const tradeCounts = new Map();
   for (const ev of state.events) {
@@ -1378,6 +1345,93 @@ function renderLeaderboards() {
     tradersRanked
       .map(([rid, count], i) => leaderboardRowHTML(i + 1, teamName(rid), "Trades this season", String(count)))
       .join("") || '<div class="empty-state">No trades yet this season.</div>';
+}
+
+/* ---------- Contract Horizon ---------- */
+
+// Builds one team's Contract Horizon card: its active roster's total salary
+// this year vs. next year's projected total if every player is kept (the
+// keeper2027 column is already computed sheet-side via the league's
+// escalator schedule — $1-5 salaries double, $6-10 go up 75%, down to +7.5%
+// above $60, per the rulebook), plus a per-player breakdown sorted by
+// biggest raise first, so an owner can quickly see who's driving next year's
+// number up and who'd be the easiest cut to get back under the cap.
+function contractHorizonCardHTML(rid) {
+  const sheet = state.sheetByRoster[rid];
+  const rows = (sheet ? sheet.activeRoster : [])
+    .filter((p) => p.salary > 0)
+    .map((p) => ({ ...p, increase: (p.keeper2027 || 0) - p.salary }))
+    .sort((a, b) => b.increase - a.increase);
+
+  const total2026 = rows.reduce((s, p) => s + p.salary, 0);
+  const total2027 = rows.reduce((s, p) => s + (p.keeper2027 || 0), 0);
+  const delta = total2027 - total2026;
+  const overCap = total2027 > CFG.hardCap;
+
+  const rowsHtml = rows
+    .map(
+      (p) => `
+        <tr>
+          <td data-label="Player">${p.name} <span class="muted-note">(${p.pos})</span></td>
+          <td class="num" data-label="2026 Salary">${money(p.salary)}</td>
+          <td class="num" data-label="2027 If Kept">${p.keeper2027 > 0 ? money(p.keeper2027) : "—"}</td>
+          <td class="num ${p.increase > 0 ? "horizon-raise" : ""}" data-label="Change">${p.increase >= 0 ? "+" : ""}${money(p.increase)}</td>
+        </tr>
+      `
+    )
+    .join("");
+
+  return `
+    <div class="horizon-card">
+      <div class="horizon-card-head">
+        <span class="horizon-team-name">${teamName(Number(rid))}</span>
+        <span class="horizon-totals">
+          <span class="horizon-total-figure">${money(total2026)} <span class="horizon-arrow">&rarr;</span> ${money(total2027)}</span>
+          <span class="horizon-delta ${delta > 0 ? "horizon-raise" : ""}">${delta >= 0 ? "+" : ""}${money(delta)} next year</span>
+        </span>
+      </div>
+      ${overCap ? `<div class="badge over-cap-badge horizon-warning">⚠ Projected over the $${CFG.hardCap} cap if everyone's kept</div>` : ""}
+      <table class="roster-table responsive-stack-table horizon-table">
+        <thead>
+          <tr><th>Player</th><th class="num">2026</th><th class="num">2027</th><th class="num">Change</th></tr>
+        </thead>
+        <tbody>${rowsHtml || '<tr><td colspan="4" class="muted-note">No salaried players on this roster.</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderContractHorizon() {
+  const container = $("#horizon-body");
+  if (!container) return;
+
+  const sortEl = $("#horizon-sort");
+  const sortBy = (sortEl && sortEl.value) || "total";
+
+  const teams = Object.keys(CFG.sheetTabsByRosterId).map((rid) => {
+    const sheet = state.sheetByRoster[rid];
+    const rows = (sheet ? sheet.activeRoster : []).filter((p) => p.salary > 0);
+    const total2026 = rows.reduce((s, p) => s + p.salary, 0);
+    const total2027 = rows.reduce((s, p) => s + (p.keeper2027 || 0), 0);
+    return {
+      rid,
+      total2026,
+      total2027,
+      delta: total2027 - total2026,
+      capSpace: sheet ? sheet.cap.remainingCap : 0,
+    };
+  });
+
+  teams.sort((a, b) => {
+    if (sortBy === "increase") return b.delta - a.delta;
+    if (sortBy === "cap") return a.capSpace - b.capSpace;
+    if (sortBy === "name") return teamName(Number(a.rid)).localeCompare(teamName(Number(b.rid)));
+    return b.total2027 - a.total2027;
+  });
+
+  container.innerHTML =
+    teams.map((t) => contractHorizonCardHTML(t.rid)).join("") ||
+    '<div class="empty-state">Salary data not available.</div>';
 }
 
 /* ---------- Trade Machine ---------- */
@@ -2899,6 +2953,7 @@ async function init() {
     renderCapMatrix();
     renderRostersPage();
     renderLeaderboards();
+    renderContractHorizon();
     initTradeMachine();
     renderRulesPage("");
     renderDraftPage();
@@ -2926,4 +2981,6 @@ document.addEventListener("DOMContentLoaded", () => {
     init();
   });
   $("#rules-search").addEventListener("input", (e) => renderRulesPage(e.target.value));
+  const horizonSortEl = $("#horizon-sort");
+  if (horizonSortEl) horizonSortEl.addEventListener("change", renderContractHorizon);
 });
