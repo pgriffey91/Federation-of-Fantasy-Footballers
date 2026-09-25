@@ -2093,6 +2093,55 @@ async function buildAllSeasonsTradeIndex() {
   const CONCURRENCY = 6;
   const index = []; // { ts, draftPicks: [...], teams: [{ name, gained }] }
 
+  const seasonToLeagueId = new Map(chain.map((l) => [String(l.season), l.league_id]));
+  const draftInfoCache = new Map(); // leagueId -> { slotToRoster, picksByNo, teamCount } | null
+
+  // A traded pick's original draft slot doesn't move when it's traded — only
+  // who makes the pick does — so slot_to_roster_id (fixed at the start of
+  // that season's draft) tells us which pick_no was "originalRid's Nth
+  // rounder," whoever actually used it.
+  async function getDraftInfo(season) {
+    const leagueId = seasonToLeagueId.get(String(season));
+    if (!leagueId) return null;
+    if (draftInfoCache.has(leagueId)) return draftInfoCache.get(leagueId);
+    let info = null;
+    try {
+      const seasonDrafts = await fetchJSON(`${API}/league/${leagueId}/drafts`);
+      const draft = (seasonDrafts || []).find((d) => d.type === "rookie") || (seasonDrafts || [])[0];
+      if (draft && draft.slot_to_roster_id) {
+        const picks = await fetchJSON(`${API}/draft/${draft.draft_id}/picks`);
+        if (picks && picks.length) {
+          const picksByNo = new Map(picks.map((p) => [p.pick_no, p]));
+          const slotToRoster = new Map(
+            Object.entries(draft.slot_to_roster_id).map(([slot, rid]) => [Number(rid), Number(slot)])
+          );
+          const teamCount = Object.keys(draft.slot_to_roster_id).length || 10;
+          info = { slotToRoster, picksByNo, teamCount };
+        }
+      }
+    } catch (err) {
+      console.error(`Pick history: draft lookup failed for season ${season}`, err);
+    }
+    draftInfoCache.set(leagueId, info);
+    return info;
+  }
+
+  // Resolves a traded pick (by its original owner, season, and round) to the
+  // player actually drafted with it — but only once that season's draft has
+  // happened; a still-future pick just returns null, same as before.
+  async function resolveDraftedPlayer(season, round, originalRid) {
+    const info = await getDraftInfo(season);
+    if (!info) return null;
+    const slot = info.slotToRoster.get(Number(originalRid));
+    if (!slot) return null;
+    const pickNo = (round - 1) * info.teamCount + slot;
+    const pick = info.picksByNo.get(pickNo);
+    if (!pick) return null;
+    if (pick.player_id) return playerLabel(pick.player_id);
+    const meta = pick.metadata || {};
+    return [meta.first_name, meta.last_name].filter(Boolean).join(" ") || null;
+  }
+
   for (const league of chain) {
     const leagueId = league.league_id;
     let users, rosters;
@@ -2142,7 +2191,10 @@ async function buildAllSeasonsTradeIndex() {
         if (!gains.has(toRoster)) gains.set(toRoster, []);
         const suffix = pick.round === 1 ? "st" : pick.round === 2 ? "nd" : pick.round === 3 ? "rd" : "th";
         const fromName = rosterName.get(pick.roster_id) || `Roster ${pick.roster_id}`;
-        gains.get(toRoster).push(`${pick.season} ${pick.round}${suffix}-round pick (${fromName}'s)`);
+        let label = `${pick.season} ${pick.round}${suffix}-round pick (${fromName}'s)`;
+        const drafted = await resolveDraftedPlayer(pick.season, pick.round, pick.roster_id);
+        if (drafted) label += ` — became ${drafted}`;
+        gains.get(toRoster).push(label);
       }
       for (const move of tx.waiver_budget || []) {
         if (!gains.has(move.receiver)) gains.set(move.receiver, []);
