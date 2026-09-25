@@ -96,6 +96,10 @@ a searchable rule book. Built to be hosted for free on GitHub Pages.
   it covers the league's full history — this makes a lot of Sleeper API
   calls, so it's only loaded the first time you open the page, not on
   initial page load.
+- **On This Day** — every trade, plus full results from any startup/rookie
+  draft, that happened on today's calendar date in any past season. Walks
+  the same full season history as Head-to-Head, so it's lazy-loaded on
+  first visit too.
 - **Rule Book** — the full rulebook with a live search box.
 
 ## Adjusting things later
