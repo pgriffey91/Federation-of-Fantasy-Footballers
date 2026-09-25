@@ -25,6 +25,7 @@ const state = {
   standingsExtra: { streakByRoster: new Map(), maxPFByRoster: new Map() },
   h2h: { loaded: false, loading: false, data: null }, // all-time head-to-head + trophy room (lazy-loaded)
   onThisDay: { loaded: false, loading: false, data: null }, // trades + drafts on this calendar day, any season (lazy-loaded)
+  rawTransactions: [], // this season's deduped, complete transactions (for the Draft Board's pick-acquisition lookup)
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -1770,7 +1771,7 @@ function h2hLeaderboardHTML(cards) {
             <th class="num">#1 Seeds</th>
             <th class="num">Trades</th>
             <th class="num">Pick Conversion</th>
-            <th class="num">PF / Max PF</th>
+            <th class="num">Lineup Efficiency</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -1778,7 +1779,7 @@ function h2hLeaderboardHTML(cards) {
     </div>
     <p class="h2h-lb-footnote">
       <strong>Pick Conversion</strong> — rookie picks that manager never released within two seasons of drafting
-      them, out of picks old enough to judge (recent rookie picks aren't scored yet). <strong>PF / Max PF</strong> —
+      them, out of picks old enough to judge (recent rookie picks aren't scored yet). <strong>Lineup Efficiency</strong> —
       actual points scored ÷ the optimal lineup's points, career-wide; a high number means a manager who rarely
       leaves points on the bench.
     </p>
@@ -2081,6 +2082,54 @@ async function loadTradedPicks(season) {
   }
 }
 
+// Finds how a (traded) pick ended up with its current owner, by searching
+// this season's trade transactions for the one that moved it there, and
+// summarizing what else changed hands in that same trade. Sleeper's
+// traded_picks endpoint only reports the final owner, not the history, so
+// if a pick changed hands more than once this returns the most recent trade
+// that routed it to its current owner.
+function findPickAcquisition(originalRid, round, season, ownerRid) {
+  if (ownerRid === originalRid) return { type: "original" };
+
+  let match = null;
+  for (const tx of state.rawTransactions) {
+    if (tx.type !== "trade" || !tx.draft_picks) continue;
+    const hit = tx.draft_picks.some(
+      (p) => String(p.season) === String(season) && p.round === round && p.roster_id === originalRid && p.owner_id === ownerRid
+    );
+    if (!hit) continue;
+    const ts = tx.status_updated || tx.created || 0;
+    if (!match || ts > match.ts) match = { tx, ts };
+  }
+  if (!match) return { type: "unknown" };
+
+  const tx = match.tx;
+  const rosterIds = tx.roster_ids || [];
+  const gains = new Map();
+  for (const rid of rosterIds) gains.set(rid, []);
+  for (const [pid, rid] of Object.entries(tx.adds || {})) {
+    if (!gains.has(rid)) gains.set(rid, []);
+    gains.get(rid).push(playerLabel(pid));
+  }
+  for (const pick of tx.draft_picks || []) {
+    const toRoster = pick.owner_id;
+    if (!gains.has(toRoster)) gains.set(toRoster, []);
+    const suffix = pick.round === 1 ? "st" : pick.round === 2 ? "nd" : pick.round === 3 ? "rd" : "th";
+    gains.get(toRoster).push(`${pick.season} ${pick.round}${suffix}-round pick (${teamName(pick.roster_id)}'s)`);
+  }
+  for (const move of tx.waiver_budget || []) {
+    if (!gains.has(move.receiver)) gains.set(move.receiver, []);
+    gains.get(move.receiver).push(`$${move.amount} FAAB`);
+  }
+
+  const teams = Array.from(gains.entries()).map(([rid, items]) => ({
+    name: teamName(rid),
+    gained: items.length ? items : ["nothing notable"],
+  }));
+
+  return { type: "trade", date: match.ts, teams };
+}
+
 // Builds the 4-round / 40-pick rookie draft order for next season.
 // Picks 1-4: the 4 non-playoff teams (seeds 7-10), ordered by Max PF
 // ascending (lowest Max PF picks first). Picks 5-10: the 6 playoff teams
@@ -2125,6 +2174,7 @@ async function buildDraftBoard() {
         ownerAvatar: owner ? owner.avatar : null,
         traded,
         originalName: original ? original.name : `Roster ${originalRid}`,
+        acquisition: findPickAcquisition(originalRid, round, nextSeason, ownerRid),
       };
     });
     rounds.push({ round, picks });
@@ -2139,7 +2189,7 @@ function draftBoardHTML(board) {
     <p class="page-sub">
       ${board.season} rookie draft order — picks 1–4 set by Max PF (lowest picks first),
       picks 5–10 set by current playoff seed (worst seed picks first). Updates live as
-      standings and traded picks change.
+      standings and traded picks change. Click any pick to see how it was acquired.
     </p>
     <div class="draft-board">
       ${board.rounds
@@ -2150,8 +2200,8 @@ function draftBoardHTML(board) {
           <div class="draft-round-picks">
             ${r.picks
               .map(
-                (p) => `
-              <div class="draft-pick-card ${p.traded ? "draft-pick-traded" : ""}">
+                (p, idx) => `
+              <div class="draft-pick-card ${p.traded ? "draft-pick-traded" : ""}" data-round="${r.round}" data-idx="${idx}" tabindex="0" role="button">
                 <span class="draft-pick-num">${p.label}</span>
                 ${p.ownerAvatar ? `<img class="draft-pick-avatar" src="${p.ownerAvatar}" alt="">` : ""}
                 <span class="draft-pick-team">${p.ownerName}</span>
@@ -2166,7 +2216,70 @@ function draftBoardHTML(board) {
         )
         .join("")}
     </div>
+    <div class="h2h-drawer" id="draft-drawer" hidden>
+      <div class="h2h-drawer-inner" id="draft-drawer-inner"></div>
+      <button class="h2h-drawer-close" id="draft-drawer-close">✕ Close</button>
+    </div>
   `;
+}
+
+function openDraftPickDrawer(pick) {
+  const inner = $("#draft-drawer-inner");
+  if (!inner) return;
+  const acq = pick.acquisition;
+
+  let bodyHtml;
+  if (!acq || acq.type === "original") {
+    bodyHtml = `<p class="h2h-drawer-sub">${pick.originalName}'s original pick — never traded.</p>`;
+  } else if (acq.type === "trade") {
+    const dateLabel = acq.date
+      ? new Date(acq.date).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+      : "";
+    bodyHtml = `
+      <p class="h2h-drawer-sub">Acquired in a trade${dateLabel ? ` on ${dateLabel}` : ""}:</p>
+      <div class="otd-trade-teams">
+        ${acq.teams
+          .map(
+            (team) => `
+          <div class="otd-trade-team">
+            <div class="otd-trade-team-name">${team.name}</div>
+            <div class="otd-trade-arrow">received</div>
+            <ul class="otd-trade-gains">${team.gained.map((g) => `<li>${g}</li>`).join("")}</ul>
+          </div>
+        `
+          )
+          .join("")}
+      </div>
+    `;
+  } else {
+    bodyHtml = `<p class="h2h-drawer-sub">This pick changed hands, but a matching trade couldn't be found in this season's transaction history.</p>`;
+  }
+
+  inner.innerHTML = `
+    <h3 class="h2h-drawer-title">Pick ${pick.label}</h3>
+    <p class="h2h-drawer-sub">Currently owned by ${pick.ownerName}</p>
+    ${bodyHtml}
+  `;
+  const drawer = $("#draft-drawer");
+  if (drawer) drawer.hidden = false;
+}
+
+function wireDraftBoardClicks(board) {
+  if (!board) return;
+  document.querySelectorAll(".draft-pick-card").forEach((card) => {
+    const round = Number(card.dataset.round);
+    const idx = Number(card.dataset.idx);
+    const roundData = board.rounds[round - 1];
+    const pick = roundData && roundData.picks[idx];
+    if (!pick) return;
+    const open = () => openDraftPickDrawer(pick);
+    card.addEventListener("click", open);
+    card.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+    });
+  });
+  const closeBtn = $("#draft-drawer-close");
+  if (closeBtn) closeBtn.addEventListener("click", () => { $("#draft-drawer").hidden = true; });
 }
 
 async function renderDraftPage() {
@@ -2188,6 +2301,7 @@ async function renderDraftPage() {
     try {
       const board = await buildDraftBoard();
       boardEl.innerHTML = draftBoardHTML(board);
+      wireDraftBoardClicks(board);
     } catch (err) {
       console.error("Draft board failed:", err);
       boardEl.innerHTML = '<div class="empty-state">Draft board not available.</div>';
@@ -2272,6 +2386,7 @@ async function init() {
     state.pointsByPlayer = statsData.totals;
     state.weeklyPointsByPlayer = statsData.weekly;
     state.standingsExtra = standingsExtra;
+    state.rawTransactions = transactions; // kept for the Draft Board's "how was this pick acquired" lookup
 
     const liveEvents = transactionsToEvents(transactions);
     state.events = [...liveEvents, ...taxiEvents].sort((a, b) => (b.date || 0) - (a.date || 0));
