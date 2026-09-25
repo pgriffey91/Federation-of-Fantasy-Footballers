@@ -75,13 +75,20 @@ a searchable rule book. Built to be hosted for free on GitHub Pages.
   Cap Graveyard of tombstones for every dead-cap player.
 - **League Rosters** — every team's active roster / taxi / IR with salaries,
   collapsed by default (ranked by remaining cap space).
-- **Leaderboards** — Best Value Contracts, Highest Paid Players, Dead Cap
-  Wall, Biggest Busts (worst points-per-dollar), Best Waiver Pickups
-  (cheapest winning FAAB bids still producing), Most Improved (points-per-game
-  trend, first half of the season vs. recent weeks), and Most Active Traders
-  (a lighter, non-judgmental stand-in for "Best Trades," which we skipped —
+- **Leaderboards** — Best Value Contracts, Highest Paid Players (with each
+  player's season points and points-per-dollar alongside their salary), Dead
+  Cap Wall, Biggest Busts (worst points-per-dollar, excluding players who
+  simply haven't played — see note below), Best Waiver Pickups (cheapest
+  winning FAAB bids still producing), Most Improved (points-per-game trend,
+  first half of the season vs. recent weeks), and Most Active Traders (a
+  lighter, non-judgmental stand-in for "Best Trades," which we skipped —
   grading who won a trade is a value call, not something a formula should
-  decide).
+  decide). Note on Biggest Busts: Sleeper's stats API has no snap-count data
+  at all, so games-actually-played (Sleeper's own per-week "gp" flag) is used
+  instead to filter out injured/inactive players who scored 0 points because
+  they never suited up — a player needs at least half of the season's weeks
+  played so far (minimum 1) to qualify, so the list reflects underperformance
+  rather than unavailability.
 - **Trade Machine** — pick two teams, select players to send each way, set
   retained salary, see the resulting cap space.
 - **Draft & FA** — a live 4-round/40-pick Draft Board for next season (picks
