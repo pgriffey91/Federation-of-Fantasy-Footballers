@@ -2125,10 +2125,16 @@ async function buildAllSeasonsTradeIndex() {
     let info = null;
     try {
       const seasonDrafts = await fetchJSON(`${API}/league/${leagueId}/drafts`);
-      const draft = pickRookieDraft(seasonDrafts);
-      if (draft && draft.slot_to_roster_id) {
-        const picks = await fetchJSON(`${API}/draft/${draft.draft_id}/picks`);
-        if (picks && picks.length) {
+      const draftSummary = pickRookieDraft(seasonDrafts);
+      if (draftSummary) {
+        // The list endpoint above doesn't include slot_to_roster_id — that
+        // only comes back from the single-draft endpoint — so it has to be
+        // fetched separately, alongside the picks themselves.
+        const [draft, picks] = await Promise.all([
+          fetchJSON(`${API}/draft/${draftSummary.draft_id}`),
+          fetchJSON(`${API}/draft/${draftSummary.draft_id}/picks`),
+        ]);
+        if (draft && draft.slot_to_roster_id && picks && picks.length) {
           const picksByNo = new Map(picks.map((p) => [p.pick_no, p]));
           const slotToRoster = new Map(
             Object.entries(draft.slot_to_roster_id).map(([slot, rid]) => [Number(rid), Number(slot)])
@@ -2209,9 +2215,14 @@ async function buildAllSeasonsTradeIndex() {
         if (!gains.has(toRoster)) gains.set(toRoster, []);
         const suffix = pick.round === 1 ? "st" : pick.round === 2 ? "nd" : pick.round === 3 ? "rd" : "th";
         const fromName = rosterName.get(pick.roster_id) || `Roster ${pick.roster_id}`;
-        let label = `${pick.season} ${pick.round}${suffix}-round pick (${fromName}'s)`;
+        // Once that season's draft has actually happened, the pick itself
+        // isn't the interesting part anymore — show who it turned into
+        // instead of the original owner's name. Still-future picks (nothing
+        // drafted yet) keep the "(Owner's)" form.
         const drafted = await resolveDraftedPlayer(pick.season, pick.round, pick.roster_id);
-        if (drafted) label += ` — became ${drafted}`;
+        const label = drafted
+          ? `${pick.season} ${pick.round}${suffix}-round pick — ${drafted}`
+          : `${pick.season} ${pick.round}${suffix}-round pick (${fromName}'s)`;
         gains.get(toRoster).push(label);
       }
       for (const move of tx.waiver_budget || []) {
