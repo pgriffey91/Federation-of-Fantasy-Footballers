@@ -15,6 +15,7 @@ const StatsData = (() => {
   async function loadSeasonPoints(season, maxWeek) {
     const weeks = Array.from({ length: maxWeek }, (_, i) => i + 1);
     const totals = new Map(); // player_id -> total pts_half_ppr
+    const weekly = new Map(); // player_id -> Map(week -> pts_half_ppr), used for trend leaderboards
 
     const CONCURRENCY = 6;
     for (let i = 0; i < weeks.length; i += CONCURRENCY) {
@@ -23,17 +24,20 @@ const StatsData = (() => {
         slice.map((w) =>
           fetch(`${API}/stats/nfl/regular/${season}/${w}`)
             .then((r) => (r.ok ? r.json() : {}))
-            .catch(() => ({}))
+            .then((data) => ({ week: w, data }))
+            .catch(() => ({ week: w, data: {} }))
         )
       );
-      for (const weekStats of results) {
-        for (const [playerId, stat] of Object.entries(weekStats || {})) {
+      for (const { week, data } of results) {
+        for (const [playerId, stat] of Object.entries(data || {})) {
           if (!stat || typeof stat.pts_half_ppr !== "number") continue;
           totals.set(playerId, (totals.get(playerId) || 0) + stat.pts_half_ppr);
+          if (!weekly.has(playerId)) weekly.set(playerId, new Map());
+          weekly.get(playerId).set(week, stat.pts_half_ppr);
         }
       }
     }
-    return totals; // Map player_id -> total points
+    return { totals, weekly };
   }
 
   return { loadSeasonPoints };
