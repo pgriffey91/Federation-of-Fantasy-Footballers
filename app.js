@@ -612,11 +612,11 @@ function streakClass(streak) {
 // league convention. Returns an array of 10 team objects (rid + roster info)
 // in seed order (index 0 = seed 1). Used by both Standings and the Draft
 // Board (picks 5-10 mirror seeds 1-6, picks 1-4 come from seeds 7-10).
-function getStandingsRanked() {
-  const rosterIds = Array.from(state.rosterMap.keys());
-  if (!rosterIds.length) return [];
-  const teams = rosterIds.map((rid) => ({ rid, ...state.rosterMap.get(rid) }));
-
+// Generic version of the seeding convention: takes any array of
+// { rid, wins, losses, pointsFor, ... } and returns it re-ordered into seeds
+// 1-10. Used for the live Standings page and, per-season, by the
+// Head-to-Head leaderboard (to find each season's #1 seed and top scorers).
+function seedTeams(teams) {
   const byRecord = [...teams].sort((a, b) => {
     if (b.wins !== a.wins) return b.wins - a.wins;
     if (a.losses !== b.losses) return a.losses - b.losses;
@@ -625,8 +625,14 @@ function getStandingsRanked() {
   const top4 = byRecord.slice(0, 4);
   const top4Ids = new Set(top4.map((t) => t.rid));
   const rest = teams.filter((t) => !top4Ids.has(t.rid)).sort((a, b) => b.pointsFor - a.pointsFor);
-
   return [...top4, ...rest];
+}
+
+function getStandingsRanked() {
+  const rosterIds = Array.from(state.rosterMap.keys());
+  if (!rosterIds.length) return [];
+  const teams = rosterIds.map((rid) => ({ rid, ...state.rosterMap.get(rid) }));
+  return seedTeams(teams);
 }
 
 function renderStandings() {
@@ -1394,11 +1400,16 @@ async function collectSeasonChain() {
 // trophies (championship / runner-up / 3rd place) per manager, keyed by
 // Sleeper's stable user_id (not roster_id, which is season-scoped and can
 // be reassigned when a franchise changes hands).
+const TWO_SEASONS_MS = 2 * 365 * 24 * 3600 * 1000;
+
 async function buildH2HData() {
   const chain = await collectSeasonChain();
   const userInfo = new Map(); // user_id -> { name, avatar }
   const records = new Map(); // `${a}|${b}` -> { wins, losses, ties } (a's record vs b)
   const trophies = new Map(); // user_id -> { championships, runnerups, thirds, playoffs, seasons: [] }
+  const lb = new Map(); // user_id -> career leaderboard stats (see ensureLB)
+  const dropsByUserPlayer = new Map(); // `${uid}|${playerId}` -> earliest drop timestamp by that owner
+  const rookiePicks = []; // { uid, playerId, draftDate, season } — for conversion-rate scoring after the full chain is walked
   const CONCURRENCY = 6;
 
   const ensureUser = (uid, name, avatar) => {
@@ -1409,6 +1420,16 @@ async function buildH2HData() {
   const ensureTrophy = (uid) => {
     if (!trophies.has(uid)) trophies.set(uid, { championships: 0, runnerups: 0, thirds: 0, playoffs: 0, seasons: [] });
     return trophies.get(uid);
+  };
+  const ensureLB = (uid) => {
+    if (!lb.has(uid)) {
+      lb.set(uid, {
+        wins: 0, losses: 0, ties: 0,
+        top3Seasons: 0, firstSeedSeasons: 0, trades: 0,
+        actualPF: 0, maxPF: 0,
+      });
+    }
+    return lb.get(uid);
   };
   const bump = (a, b, result) => {
     const key = `${a}|${b}`;
@@ -1432,6 +1453,7 @@ async function buildH2HData() {
 
     const userMap = new Map(users.map((u) => [u.user_id, u]));
     const rosterToUser = new Map(); // roster_id -> user_id, this season only
+    const seasonTeams = []; // for seeding: { rid, wins, losses, ties, pointsFor }
     for (const r of rosters) {
       if (!r.owner_id) continue;
       rosterToUser.set(r.roster_id, r.owner_id);
@@ -1441,8 +1463,34 @@ async function buildH2HData() {
       // stable identity a manager keeps across every season.
       const ownerLabel = u.display_name || `Manager ${r.owner_id}`;
       ensureUser(r.owner_id, ownerLabel, u.avatar ? `https://sleepercdn.com/avatars/thumbs/${u.avatar}` : null);
+
+      const s = r.settings || {};
+      const wins = s.wins || 0;
+      const losses = s.losses || 0;
+      const ties = s.ties || 0;
+      const pointsFor = (s.fpts || 0) + (s.fpts_decimal || 0) / 100;
+      seasonTeams.push({ rid: r.roster_id, wins, losses, ties, pointsFor });
+      const career = ensureLB(r.owner_id);
+      career.wins += wins;
+      career.losses += losses;
+      career.ties += ties;
     }
 
+    // Regular-season #1 seed and top-3 scoring teams, per season.
+    if (seasonTeams.length) {
+      const seeded = seedTeams(seasonTeams);
+      const firstSeedUid = rosterToUser.get(seeded[0].rid);
+      if (firstSeedUid) ensureLB(firstSeedUid).firstSeedSeasons++;
+
+      const byPoints = [...seasonTeams].sort((a, b) => b.pointsFor - a.pointsFor).slice(0, 3);
+      for (const t of byPoints) {
+        const uid = rosterToUser.get(t.rid);
+        if (uid) ensureLB(uid).top3Seasons++;
+      }
+    }
+
+    // Weekly matchups: head-to-head pairwise results, plus actual-PF and
+    // Max-PF (optimal-lineup) totals for the career coaching-efficiency stat.
     const maxWeek = CFG.maxWeek || 18;
     const weeks = Array.from({ length: maxWeek }, (_, i) => i + 1);
     const weekResults = [];
@@ -1461,6 +1509,16 @@ async function buildH2HData() {
         if (entry.matchup_id == null) continue;
         if (!byMatchup.has(entry.matchup_id)) byMatchup.set(entry.matchup_id, []);
         byMatchup.get(entry.matchup_id).push(entry);
+      }
+      for (const entry of wk) {
+        const uid = rosterToUser.get(entry.roster_id);
+        if (!uid) continue;
+        const actual = entry.points || 0;
+        if (actual <= 0) continue; // week not played yet
+        const optimal = computeOptimalLineupPoints(entry.players || [], entry.players_points || {}, league.roster_positions || []);
+        const career = ensureLB(uid);
+        career.actualPF += actual;
+        career.maxPF += Math.max(optimal, actual);
       }
       for (const pair of byMatchup.values()) {
         if (pair.length !== 2) continue;
@@ -1481,6 +1539,63 @@ async function buildH2HData() {
           bump(uY, uX, "wins");
         }
       }
+    }
+
+    // Weekly transactions: trade counts, plus a drop-event index used to
+    // score draft-pick conversion (was a rookie pick released by the same
+    // GM within two seasons, or did it stick as a long-term asset?).
+    const txResults = [];
+    for (let i = 0; i < weeks.length; i += CONCURRENCY) {
+      const slice = weeks.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(
+        slice.map((w) => fetchJSON(`${API}/league/${leagueId}/transactions/${w}`).catch(() => []))
+      );
+      txResults.push(...results.flat());
+    }
+    const seenTradeIds = new Set();
+    for (const tx of txResults) {
+      const ts = tx.status_updated || tx.created;
+      if (tx.type === "trade" && tx.status === "complete" && !seenTradeIds.has(tx.transaction_id)) {
+        seenTradeIds.add(tx.transaction_id);
+        for (const rid of tx.roster_ids || []) {
+          const uid = rosterToUser.get(rid);
+          if (uid) ensureLB(uid).trades++;
+        }
+      }
+      if (tx.drops && ts) {
+        for (const [playerId, rid] of Object.entries(tx.drops)) {
+          const uid = rosterToUser.get(rid);
+          if (!uid) continue;
+          const key = `${uid}|${playerId}`;
+          const prev = dropsByUserPlayer.get(key);
+          if (prev == null || ts < prev) dropsByUserPlayer.set(key, ts);
+        }
+      }
+    }
+
+    // Rookie-draft picks: who drafted whom, and when, so it can be scored
+    // for conversion once every season has been walked.
+    try {
+      const seasonDrafts = await fetchJSON(`${API}/league/${leagueId}/drafts`);
+      for (const draft of seasonDrafts || []) {
+        if (draft.type && draft.type !== "rookie") continue; // startup/auction drafts aren't rookie-asset bets
+        const draftDate = draft.start_time || draft.last_picked;
+        if (!draftDate) continue;
+        let picks = [];
+        try {
+          picks = await fetchJSON(`${API}/draft/${draft.draft_id}/picks`);
+        } catch (err) {
+          continue;
+        }
+        for (const p of picks || []) {
+          if (!p.player_id) continue;
+          const uid = rosterToUser.get(p.roster_id);
+          if (!uid) continue;
+          rookiePicks.push({ uid, playerId: p.player_id, draftDate, season });
+        }
+      }
+    } catch (err) {
+      console.error(`H2H: drafts failed for season ${season}`, err);
     }
 
     try {
@@ -1513,7 +1628,30 @@ async function buildH2HData() {
     }
   }
 
-  return { userInfo, records, trophies, seasonsCovered: chain.map((l) => l.season) };
+  // Score draft-pick conversion now that every season's drops are indexed.
+  // "Converted" = the GM who drafted this player never released him within
+  // two seasons (he either became a long-term piece or was traded for value
+  // — either way, they didn't just cut a bust). Only picks old enough for
+  // two seasons to have actually elapsed count toward the rate.
+  const now = Date.now();
+  for (const pick of rookiePicks) {
+    if (now - pick.draftDate < TWO_SEASONS_MS) continue; // too recent to judge yet
+    const career = ensureLB(pick.uid);
+    career.picksEligible = (career.picksEligible || 0) + 1;
+    career.picksConverted = career.picksConverted || 0;
+    const droppedAt = dropsByUserPlayer.get(`${pick.uid}|${pick.playerId}`);
+    if (droppedAt == null || droppedAt - pick.draftDate > TWO_SEASONS_MS) {
+      career.picksConverted++;
+    }
+  }
+
+  return {
+    userInfo,
+    records,
+    trophies,
+    leaderboard: lb,
+    seasonsCovered: chain.map((l) => l.season),
+  };
 }
 
 function h2hCardHTML(c) {
@@ -1575,6 +1713,78 @@ function openH2HDrawer(uid, data, cards) {
   if (drawer) drawer.hidden = false;
 }
 
+function h2hLegendHTML() {
+  return `
+    <div class="h2h-legend">
+      <span class="h2h-legend-item"><span class="h2h-legend-icon">🏆</span> Championships</span>
+      <span class="h2h-legend-item"><span class="h2h-legend-icon">🥈</span> Runner-up</span>
+      <span class="h2h-legend-item"><span class="h2h-legend-icon">🥉</span> 3rd place</span>
+      <span class="h2h-legend-item"><span class="h2h-legend-icon">⛳</span> Playoff appearances</span>
+    </div>
+  `;
+}
+
+function h2hLeaderboardHTML(cards) {
+  const rows = [...cards]
+    .sort((a, b) => {
+      if (b.t.championships !== a.t.championships) return b.t.championships - a.t.championships;
+      if (b.t.playoffs !== a.t.playoffs) return b.t.playoffs - a.t.playoffs;
+      return b.lb.wins - a.lb.wins;
+    })
+    .map((c) => {
+      const lb = c.lb;
+      const finals = c.t.championships + c.t.runnerups;
+      const record = `${lb.wins}-${lb.losses}${lb.ties ? `-${lb.ties}` : ""}`;
+      const conversion = lb.picksEligible
+        ? `${Math.round((lb.picksConverted / lb.picksEligible) * 100)}% (${lb.picksConverted}/${lb.picksEligible})`
+        : "—";
+      const efficiency = lb.maxPF > 0 ? `${((lb.actualPF / lb.maxPF) * 100).toFixed(1)}%` : "—";
+      return `
+        <tr>
+          <td class="h2h-lb-name">${c.info.name}</td>
+          <td class="num">${record}</td>
+          <td class="num">${lb.top3Seasons}</td>
+          <td class="num">${c.t.playoffs}</td>
+          <td class="num">${c.t.championships}</td>
+          <td class="num">${finals}</td>
+          <td class="num">${lb.firstSeedSeasons}</td>
+          <td class="num">${lb.trades}</td>
+          <td class="num">${conversion}</td>
+          <td class="num">${efficiency}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  return `
+    <div class="h2h-lb-wrap">
+      <table class="h2h-lb-table">
+        <thead>
+          <tr>
+            <th>Manager</th>
+            <th class="num">Record</th>
+            <th class="num">Top-3 Scoring</th>
+            <th class="num">Playoffs</th>
+            <th class="num">Titles</th>
+            <th class="num">Finals</th>
+            <th class="num">#1 Seeds</th>
+            <th class="num">Trades</th>
+            <th class="num">Pick Conversion</th>
+            <th class="num">PF / Max PF</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <p class="h2h-lb-footnote">
+      <strong>Pick Conversion</strong> — rookie picks that manager never released within two seasons of drafting
+      them, out of picks old enough to judge (recent rookie picks aren't scored yet). <strong>PF / Max PF</strong> —
+      actual points scored ÷ the optimal lineup's points, career-wide; a high number means a manager who rarely
+      leaves points on the bench.
+    </p>
+  `;
+}
+
 function renderH2HPage(data) {
   const container = $("#h2h-body");
   if (!container) return;
@@ -1584,6 +1794,10 @@ function renderH2HPage(data) {
     uid,
     info: data.userInfo.get(uid) || { name: `Manager ${uid}`, avatar: null },
     t: data.trophies.get(uid) || { championships: 0, runnerups: 0, thirds: 0, playoffs: 0, seasons: [] },
+    lb: data.leaderboard.get(uid) || {
+      wins: 0, losses: 0, ties: 0, top3Seasons: 0, firstSeedSeasons: 0, trades: 0,
+      actualPF: 0, maxPF: 0, picksConverted: 0, picksEligible: 0,
+    },
   }));
 
   const seasons = data.seasonsCovered.slice().sort();
@@ -1591,8 +1805,13 @@ function renderH2HPage(data) {
   container.innerHTML = `
     <p class="page-sub">
       All-time history across ${seasons.length} season${seasons.length === 1 ? "" : "s"}
-      (${seasons[0]}–${seasons[seasons.length - 1]}). Click a manager for their full head-to-head breakdown.
+      (${seasons[0]}–${seasons[seasons.length - 1]}).
     </p>
+    <h3 class="h2h-section-title">Career Leaderboard</h3>
+    ${h2hLeaderboardHTML(cards)}
+    <h3 class="h2h-section-title">Manager Cards</h3>
+    <p class="page-sub">Click a manager for their full head-to-head breakdown.</p>
+    ${h2hLegendHTML()}
     <div class="h2h-grid">${cards.map((c) => h2hCardHTML(c)).join("")}</div>
     <div class="h2h-drawer" id="h2h-drawer" hidden>
       <div class="h2h-drawer-inner" id="h2h-drawer-inner"></div>
