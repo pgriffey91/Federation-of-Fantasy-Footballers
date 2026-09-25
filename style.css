@@ -355,6 +355,16 @@ a { color: var(--accent); }
 }
 .player-card-cost-label { margin-top: 0; margin-bottom: 4px; }
 .player-card-cost-value { display: block; font-size: 1.05rem; font-weight: 700; color: var(--emerald); }
+.player-history-warning {
+  font-size: 0.8rem;
+  color: var(--amber);
+  background: rgba(240, 180, 41, 0.08);
+  border: 1px solid var(--amber);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  margin: 0 0 12px;
+}
+.player-history-warning a { color: var(--amber); text-decoration: underline; }
 .player-card-note {
   font-size: 0.75rem;
   color: var(--muted);
