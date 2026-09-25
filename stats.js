@@ -16,6 +16,13 @@ const StatsData = (() => {
     const weeks = Array.from({ length: maxWeek }, (_, i) => i + 1);
     const totals = new Map(); // player_id -> total pts_half_ppr
     const weekly = new Map(); // player_id -> Map(week -> pts_half_ppr), used for trend leaderboards
+    // Sleeper's stats API has no snap-count data at all (checked every field
+    // on a player's weekly stat line — there's no off_snp/def_snp/snap % of
+    // any kind), so games-actually-played (Sleeper's own `gp` flag) is the
+    // closest available proxy for "was this guy actually active," used to
+    // keep injured/inactive players who scored 0 out of the Biggest Busts
+    // leaderboard.
+    const gamesPlayed = new Map(); // player_id -> count of weeks with gp === 1
 
     const CONCURRENCY = 6;
     for (let i = 0; i < weeks.length; i += CONCURRENCY) {
@@ -34,10 +41,11 @@ const StatsData = (() => {
           totals.set(playerId, (totals.get(playerId) || 0) + stat.pts_half_ppr);
           if (!weekly.has(playerId)) weekly.set(playerId, new Map());
           weekly.get(playerId).set(week, stat.pts_half_ppr);
+          if (stat.gp === 1) gamesPlayed.set(playerId, (gamesPlayed.get(playerId) || 0) + 1);
         }
       }
     }
-    return { totals, weekly };
+    return { totals, weekly, gamesPlayed };
   }
 
   return { loadSeasonPoints };
