@@ -90,7 +90,12 @@ a searchable rule book. Built to be hosted for free on GitHub Pages.
   and shown as "via &lt;original team&gt;" — click any pick to see how it was
   acquired (the trade it came from, everything else that changed hands in
   that trade, and the date), or "original pick, never traded" if it hasn't
-  moved. Plus the rookie salary schedule and free-agency/waiver rules.
+  moved. The acquisition lookup searches the league's ENTIRE trade history —
+  not just this season — by walking the same `previous_league_id` chain as
+  Head-to-Head/On This Day, so a pick traded two or three seasons ago still
+  resolves correctly; that history is only fetched the first time you click
+  a pick (and cached after that), so it doesn't slow down the page otherwise.
+  Plus the rookie salary schedule and free-agency/waiver rules.
 - **Head-to-Head** — a career leaderboard table (record, top-3-scoring
   seasons, playoff appearances, titles, championship-game appearances, #1
   seeds, trades, rookie-Draft-Pick Conversion Rate, and Lineup Efficiency —
