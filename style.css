@@ -824,6 +824,20 @@ main {
   display: inline-block;
   margin-bottom: 8px;
 }
+.horizon-rookie-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  background: #0d0f14;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.horizon-rookie-total { font-weight: 700; color: var(--amber); white-space: nowrap; }
 .horizon-table { margin: 6px 0 0; font-size: 0.82rem; }
 
 /* Trade Machine */
