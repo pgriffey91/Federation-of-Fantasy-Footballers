@@ -388,6 +388,7 @@ a { color: var(--accent); }
 .player-history-badge-trade { color: var(--accent); border-color: var(--accent); }
 .player-history-badge-add { color: var(--emerald); border-color: var(--emerald); }
 .player-history-badge-drop { color: var(--crimson); border-color: var(--crimson); }
+.player-history-badge-draft { color: var(--violet); border-color: var(--violet); }
 .player-history-date { font-size: 0.78rem; color: var(--muted); }
 .player-history-detail { font-size: 0.85rem; margin: 0; }
 
