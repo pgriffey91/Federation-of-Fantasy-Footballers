@@ -63,14 +63,39 @@ a searchable rule book. Built to be hosted for free on GitHub Pages.
 
 ## Pages
 
-- **Home** — header stats (hard cap, trade deadline, season phase), the Cap
-  Health Matrix, and the live activity feed with filters.
-- **My Team** — pick a team, see its active roster / taxi / IR with salaries.
-- **League Rosters** — the same breakdown for every team, collapsed by default.
-- **Leaderboards** — Best Value Contracts, Highest Paid Players, Dead Cap Wall.
+- **Home** — header stats (hard cap, a live countdown to the trade deadline
+  computed from Sleeper's NFL season-start date, season phase), the
+  Standings table (record, current streak, waiver priority, points for/
+  against, and Max PF — the season total if each team had started its
+  optimal lineup every week; seeds 1-2 marked 1st-round bye, 3-4 playoffs,
+  5-6 wild card, and 7-10 show points back of 6th place; click a row to
+  expand its Cap Health card), and the live activity feed with filters.
+- **Cap Health** — the Salary Cap & Roster Hub: league-wide stat tiles,
+  every team's cap breakdown ranked from most cap space to least, and a
+  Cap Graveyard of tombstones for every dead-cap player.
+- **League Rosters** — every team's active roster / taxi / IR with salaries,
+  collapsed by default (ranked by remaining cap space).
+- **Leaderboards** — Best Value Contracts, Highest Paid Players, Dead Cap
+  Wall, Biggest Busts (worst points-per-dollar), Best Waiver Pickups
+  (cheapest winning FAAB bids still producing), Most Improved (points-per-game
+  trend, first half of the season vs. recent weeks), and Most Active Traders
+  (a lighter, non-judgmental stand-in for "Best Trades," which we skipped —
+  grading who won a trade is a value call, not something a formula should
+  decide).
 - **Trade Machine** — pick two teams, select players to send each way, set
   retained salary, see the resulting cap space.
-- **Draft & FA** — the rookie salary schedule and free-agency/waiver rules.
+- **Draft & FA** — a live 4-round/40-pick Draft Board for next season (picks
+  1-4 set by Max PF ascending, picks 5-10 by current playoff seed worst-first,
+  with traded picks resolved live and shown as "via &lt;original team&gt;"),
+  plus the rookie salary schedule and free-agency/waiver rules.
+- **Head-to-Head** — a card per current manager with trophy-room badges
+  (championships 🏆, runner-ups 🥈, 3rd-place finishes 🥉, playoff
+  appearances ⛳); click a card to open a side drawer with that manager's
+  all-time head-to-head record against every other manager. Built by walking
+  the league's `previous_league_id` chain back to its very first season, so
+  it covers the league's full history — this makes a lot of Sleeper API
+  calls, so it's only loaded the first time you open the page, not on
+  initial page load.
 - **Rule Book** — the full rulebook with a live search box.
 
 ## Adjusting things later
