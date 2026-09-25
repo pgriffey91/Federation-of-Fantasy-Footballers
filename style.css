@@ -1054,3 +1054,76 @@ select, input[type="search"] {
 }
 
 .h2h-drawer-close:hover { border-color: var(--accent); }
+
+/* ---------- On This Day ---------- */
+
+.otd-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.otd-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.otd-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.otd-badge {
+  font-size: 0.76rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.otd-badge-trade {
+  background: rgba(59, 130, 246, 0.16);
+  color: var(--accent);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+}
+
+.otd-badge-draft {
+  background: rgba(240, 180, 41, 0.16);
+  color: var(--amber);
+  border: 1px solid rgba(240, 180, 41, 0.4);
+}
+
+.otd-year {
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.otd-trade-teams {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.otd-trade-team-name {
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.otd-trade-arrow {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+.otd-trade-gains {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.88rem;
+}
