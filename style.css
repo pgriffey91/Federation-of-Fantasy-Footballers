@@ -295,6 +295,107 @@ a { color: var(--accent); }
   .search-modal { max-width: none; max-height: 100vh; height: 100vh; border-radius: 0; }
 }
 
+/* ---------- Player Card Modal ---------- */
+
+.player-card-modal {
+  max-width: 640px;
+  max-height: 82vh;
+}
+.player-card-title-text {
+  flex: 1;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-card-body {
+  overflow-y: auto;
+  padding: 16px;
+}
+.player-card-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 14px;
+}
+.player-card-team-line { font-weight: 600; color: var(--muted); }
+.player-card-roster-line { font-size: 0.85rem; color: var(--muted); }
+
+.player-card-section-title {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 18px 0 8px;
+}
+.player-card-section-title:first-of-type { margin-top: 0; }
+
+.player-card-stat-row, .player-card-cost-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.player-card-stat, .player-card-cost {
+  background: #0d0f14;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 10px 8px;
+  text-align: center;
+}
+.player-card-stat-value { display: block; font-size: 1.3rem; font-weight: 700; }
+.player-card-stat-label, .player-card-cost-label {
+  display: block;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.player-card-cost-label { margin-top: 0; margin-bottom: 4px; }
+.player-card-cost-value { display: block; font-size: 1.05rem; font-weight: 700; color: var(--emerald); }
+.player-card-note {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-style: italic;
+  margin: 8px 0 0;
+}
+
+.player-history-list { display: flex; flex-direction: column; gap: 10px; }
+.player-history-item {
+  background: #0d0f14;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.player-history-item-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.player-history-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-border);
+}
+.player-history-badge-trade { color: var(--accent); border-color: var(--accent); }
+.player-history-badge-add { color: var(--emerald); border-color: var(--emerald); }
+.player-history-badge-drop { color: var(--crimson); border-color: var(--crimson); }
+.player-history-date { font-size: 0.78rem; color: var(--muted); }
+.player-history-detail { font-size: 0.85rem; margin: 0; }
+
+@media (max-width: 600px) {
+  .player-card-stat-row, .player-card-cost-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .player-card-stat-value { font-size: 1.1rem; }
+}
+
 main {
   max-width: 1080px;
   margin: 0 auto;
