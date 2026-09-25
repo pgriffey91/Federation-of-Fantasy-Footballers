@@ -96,6 +96,25 @@ function playerLabel(id) {
   return p.pos ? `${p.name} (${p.pos})` : p.name;
 }
 
+// Picks the rookie draft out of a season's Sleeper `drafts` list. Sleeper's
+// `draft.type` is the draft FORMAT ("snake", "linear", "auction") — there is
+// no "rookie" value — so a rookie draft can't be identified by type alone.
+// This league's startup/auction draft runs through a Google Sheet rather
+// than Sleeper (see README), so in practice every draft Sleeper knows about
+// for this league already is a rookie draft; the "auction" exclusion here is
+// just a safety net in case that ever changes. When more than one qualifies,
+// the shortest one wins, since a rookie draft is a handful of rounds while a
+// full-roster startup would be many more.
+function pickRookieDraft(drafts) {
+  const candidates = (drafts || []).filter((d) => d.type !== "auction");
+  if (!candidates.length) return null;
+  return candidates.reduce((best, d) => {
+    const rounds = (d.settings && d.settings.rounds) || 999;
+    const bestRounds = (best.settings && best.settings.rounds) || 999;
+    return rounds < bestRounds ? d : best;
+  }, candidates[0]);
+}
+
 function playerIdForName(name) {
   return state.nameIndex.get(SheetData.normalizeName(name));
 }
@@ -1578,15 +1597,14 @@ async function buildH2HData() {
     // for conversion once every season has been walked.
     try {
       const seasonDrafts = await fetchJSON(`${API}/league/${leagueId}/drafts`);
-      for (const draft of seasonDrafts || []) {
-        if (draft.type && draft.type !== "rookie") continue; // startup/auction drafts aren't rookie-asset bets
-        const draftDate = draft.start_time || draft.last_picked;
-        if (!draftDate) continue;
+      const draft = pickRookieDraft(seasonDrafts);
+      const draftDate = draft && (draft.start_time || draft.last_picked);
+      if (draft && draftDate) {
         let picks = [];
         try {
           picks = await fetchJSON(`${API}/draft/${draft.draft_id}/picks`);
         } catch (err) {
-          continue;
+          picks = [];
         }
         for (const p of picks || []) {
           if (!p.player_id) continue;
@@ -2107,7 +2125,7 @@ async function buildAllSeasonsTradeIndex() {
     let info = null;
     try {
       const seasonDrafts = await fetchJSON(`${API}/league/${leagueId}/drafts`);
-      const draft = (seasonDrafts || []).find((d) => d.type === "rookie") || (seasonDrafts || [])[0];
+      const draft = pickRookieDraft(seasonDrafts);
       if (draft && draft.slot_to_roster_id) {
         const picks = await fetchJSON(`${API}/draft/${draft.draft_id}/picks`);
         if (picks && picks.length) {
