@@ -109,14 +109,20 @@ a searchable rule book. Built to be hosted for free on GitHub Pages.
 - **Contract Horizon** — its own page: one card per team showing this year's
   active-roster salary total against next year's projected total if every
   current player is kept (using the sheet's already-computed keeper-escalator
-  column), with a per-player breakdown sorted by biggest raise first so an
-  owner can see at a glance who's driving next year's number up and who'd be
-  the easiest cut. Teams projecting over the hard cap are flagged. Sortable
-  by projected 2027 total, total raise, current cap space, or team name. This
-  format has no fixed contract lengths (every player renews at the escalator
-  rate or gets cut each offseason), so there's no real "expiring contract"
-  subset — this is the full cap picture each team faces next year, not a
-  filtered slice of it.
+  column) PLUS that team's estimated rookie-draft cost, with a per-player
+  breakdown sorted by biggest raise first so an owner can see at a glance who's
+  driving next year's number up and who'd be the easiest cut. The rookie-cost
+  estimate matches each pick a team currently holds (accounting for trades,
+  same resolution as the Draft Board below) against the rookie salary
+  schedule for that exact slot, and is shown as its own line per card
+  ("2027 rookie picks (4): 1.07, 2.07, 3.07, 4.07 — ~$39"), rolled into the
+  team's grand total and over-cap check. It's a moving target, not a lock —
+  the draft order it's based on shifts as standings, Max PF, and traded picks
+  change before the actual draft. Sortable by projected 2027 total, total
+  raise, current cap space, or team name. This format has no fixed contract
+  lengths (every player renews at the escalator rate or gets cut each
+  offseason), so there's no real "expiring contract" subset — this is the
+  full cap picture each team faces next year, not a filtered slice of it.
 - **Trade Machine** — pick two teams, select players to send each way, set
   retained salary, see the resulting cap space.
 - **Draft & FA** — a live 4-round/40-pick Draft Board for next season (picks
