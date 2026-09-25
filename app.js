@@ -27,6 +27,7 @@ const state = {
   h2h: { loaded: false, loading: false, data: null }, // all-time head-to-head + trophy room (lazy-loaded)
   onThisDay: { loaded: false, loading: false, data: null }, // trades + drafts on this calendar day, any season (lazy-loaded)
   rawTransactions: [], // this season's deduped, complete transactions
+  draftBoard: null, // next season's draft board (built once in init, shared with Contract Horizon)
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -1356,7 +1357,7 @@ function renderLeaderboards() {
 // above $60, per the rulebook), plus a per-player breakdown sorted by
 // biggest raise first, so an owner can quickly see who's driving next year's
 // number up and who'd be the easiest cut to get back under the cap.
-function contractHorizonCardHTML(rid) {
+function contractHorizonCardHTML(rid, rookieCostByRid, nextSeason) {
   const sheet = state.sheetByRoster[rid];
   const rows = (sheet ? sheet.activeRoster : [])
     .filter((p) => p.salary > 0)
@@ -1365,8 +1366,11 @@ function contractHorizonCardHTML(rid) {
 
   const total2026 = rows.reduce((s, p) => s + p.salary, 0);
   const total2027 = rows.reduce((s, p) => s + (p.keeper2027 || 0), 0);
-  const delta = total2027 - total2026;
-  const overCap = total2027 > CFG.hardCap;
+  const rookie = rookieCostByRid && rookieCostByRid.get(String(rid));
+  const rookieTotal = rookie ? rookie.total : 0;
+  const grandTotal2027 = total2027 + rookieTotal;
+  const delta = grandTotal2027 - total2026;
+  const overCap = grandTotal2027 > CFG.hardCap;
 
   const rowsHtml = rows
     .map(
@@ -1386,11 +1390,21 @@ function contractHorizonCardHTML(rid) {
       <div class="horizon-card-head">
         <span class="horizon-team-name">${teamName(Number(rid))}</span>
         <span class="horizon-totals">
-          <span class="horizon-total-figure">${money(total2026)} <span class="horizon-arrow">&rarr;</span> ${money(total2027)}</span>
+          <span class="horizon-total-figure">${money(total2026)} <span class="horizon-arrow">&rarr;</span> ${money(grandTotal2027)}</span>
           <span class="horizon-delta ${delta > 0 ? "horizon-raise" : ""}">${delta >= 0 ? "+" : ""}${money(delta)} next year</span>
         </span>
       </div>
-      ${overCap ? `<div class="badge over-cap-badge horizon-warning">⚠ Projected over the $${CFG.hardCap} cap if everyone's kept</div>` : ""}
+      ${overCap ? `<div class="badge over-cap-badge horizon-warning">⚠ Projected over the $${CFG.hardCap} cap if everyone's kept, rookies included</div>` : ""}
+      ${
+        rookie && rookie.count
+          ? `
+        <div class="horizon-rookie-line">
+          <span class="horizon-rookie-label">${nextSeason} rookie picks (${rookie.count}): ${rookie.picks.map((p) => p.label).join(", ")}</span>
+          <span class="horizon-rookie-total">~${money(rookieTotal)}</span>
+        </div>
+      `
+          : ""
+      }
       <table class="roster-table responsive-stack-table horizon-table">
         <thead>
           <tr><th>Player</th><th class="num">2026</th><th class="num">2027</th><th class="num">Change</th></tr>
@@ -1401,23 +1415,34 @@ function contractHorizonCardHTML(rid) {
   `;
 }
 
-function renderContractHorizon() {
+// `draftBoard` is the same 2027 draft-order data the Draft & FA page shows
+// (see buildDraftBoard) — passed in from init() so it's only fetched/built
+// once per page load rather than twice. Rookie costs are an ESTIMATE: the
+// draft order is derived from CURRENT standings/Max PF and shifts as the
+// season plays out and as picks get traded, so this is a moving target, not
+// a lock — same caveat as the live draft board itself.
+function renderContractHorizon(draftBoard) {
   const container = $("#horizon-body");
   if (!container) return;
 
   const sortEl = $("#horizon-sort");
   const sortBy = (sortEl && sortEl.value) || "total";
 
+  const rookieCostByRid = computeRookieCostByTeam(draftBoard);
+  const nextSeason = draftBoard ? draftBoard.season : String(Number((state.league && state.league.season) || 0) + 1);
+
   const teams = Object.keys(CFG.sheetTabsByRosterId).map((rid) => {
     const sheet = state.sheetByRoster[rid];
     const rows = (sheet ? sheet.activeRoster : []).filter((p) => p.salary > 0);
     const total2026 = rows.reduce((s, p) => s + p.salary, 0);
     const total2027 = rows.reduce((s, p) => s + (p.keeper2027 || 0), 0);
+    const rookie = rookieCostByRid.get(String(rid));
+    const grandTotal2027 = total2027 + (rookie ? rookie.total : 0);
     return {
       rid,
       total2026,
-      total2027,
-      delta: total2027 - total2026,
+      grandTotal2027,
+      delta: grandTotal2027 - total2026,
       capSpace: sheet ? sheet.cap.remainingCap : 0,
     };
   });
@@ -1426,11 +1451,11 @@ function renderContractHorizon() {
     if (sortBy === "increase") return b.delta - a.delta;
     if (sortBy === "cap") return a.capSpace - b.capSpace;
     if (sortBy === "name") return teamName(Number(a.rid)).localeCompare(teamName(Number(b.rid)));
-    return b.total2027 - a.total2027;
+    return b.grandTotal2027 - a.grandTotal2027;
   });
 
   container.innerHTML =
-    teams.map((t) => contractHorizonCardHTML(t.rid)).join("") ||
+    teams.map((t) => contractHorizonCardHTML(t.rid, rookieCostByRid, nextSeason)).join("") ||
     '<div class="empty-state">Salary data not available.</div>';
 }
 
@@ -2254,6 +2279,55 @@ const ROOKIE_SCHEDULE = [
   ["Round 4 (all picks)", "$2"],
 ];
 
+// Parses a ROOKIE_SCHEDULE row's pick label ("1.01", "1.02–1.03", or
+// "Round 4 (all picks)") into { round, from, to }, so the rookie-cost
+// estimate below always matches the displayed schedule table exactly —
+// there's only one place these dollar amounts are written down.
+function parsePickRangeLabel(label) {
+  const roundAllMatch = label.match(/^Round (\d+)/);
+  if (roundAllMatch) return { round: Number(roundAllMatch[1]), from: 1, to: 10 };
+  const parts = label.split(/[–-]/).map((s) => s.trim());
+  const [r1, p1] = parts[0].split(".").map(Number);
+  if (parts.length === 1) return { round: r1, from: p1, to: p1 };
+  const [, p2] = parts[1].split(".").map(Number);
+  return { round: r1, from: p1, to: p2 };
+}
+
+const ROOKIE_SALARY_RANGES = ROOKIE_SCHEDULE.map(([label, salaryStr]) => ({
+  ...parsePickRangeLabel(label),
+  salary: Number(salaryStr.replace(/[^0-9.]/g, "")),
+}));
+
+function rookiePickSalary(round, pickNumInRound) {
+  const range = ROOKIE_SALARY_RANGES.find(
+    (r) => r.round === round && pickNumInRound >= r.from && pickNumInRound <= r.to
+  );
+  return range ? range.salary : 0;
+}
+
+// Tallies the rookie salary schedule's cost against every pick each team
+// currently holds in the upcoming draft board (accounting for trades), so
+// Contract Horizon can show what each team is on the hook for beyond just
+// this year's roster escalating. Keyed by roster_id string to match
+// state.sheetByRoster / CFG.sheetTabsByRosterId.
+function computeRookieCostByTeam(board) {
+  const costByRid = new Map();
+  if (!board) return costByRid;
+  for (const roundData of board.rounds) {
+    roundData.picks.forEach((pick, idx) => {
+      const pickNum = idx + 1; // picks are already in pick-order within the round
+      const salary = rookiePickSalary(roundData.round, pickNum);
+      const key = String(pick.ownerRid);
+      if (!costByRid.has(key)) costByRid.set(key, { total: 0, count: 0, picks: [] });
+      const entry = costByRid.get(key);
+      entry.total += salary;
+      entry.count += 1;
+      entry.picks.push({ label: pick.label, salary });
+    });
+  }
+  return costByRid;
+}
+
 async function loadTradedPicks(season) {
   try {
     const picks = await fetchJSON(`${API}/league/${CFG.leagueId}/traded_picks`);
@@ -2615,7 +2689,10 @@ function wireDraftBoardClicks(board) {
   if (closeBtn) closeBtn.addEventListener("click", () => { $("#draft-drawer").hidden = true; });
 }
 
-async function renderDraftPage() {
+// `draftBoard` is built once in init() (see buildDraftBoard) and shared with
+// Contract Horizon's rookie-cost estimate, so it's only fetched/computed a
+// single time per page load rather than once per page that needs it.
+function renderDraftPage(draftBoard) {
   $("#rookie-schedule").innerHTML = `
     <table class="roster-table">
       <thead><tr><th>Pick</th><th>Salary</th></tr></thead>
@@ -2630,13 +2707,10 @@ async function renderDraftPage() {
 
   const boardEl = $("#draft-board");
   if (boardEl) {
-    boardEl.innerHTML = '<div class="empty-state">Loading draft board…</div>';
-    try {
-      const board = await buildDraftBoard();
-      boardEl.innerHTML = draftBoardHTML(board);
-      wireDraftBoardClicks(board);
-    } catch (err) {
-      console.error("Draft board failed:", err);
+    if (draftBoard) {
+      boardEl.innerHTML = draftBoardHTML(draftBoard);
+      wireDraftBoardClicks(draftBoard);
+    } else {
       boardEl.innerHTML = '<div class="empty-state">Draft board not available.</div>';
     }
   }
@@ -2953,10 +3027,21 @@ async function init() {
     renderCapMatrix();
     renderRostersPage();
     renderLeaderboards();
-    renderContractHorizon();
+
+    // Built once here and shared by Contract Horizon (rookie-cost estimate)
+    // and the Draft & FA page, rather than fetched/computed twice.
+    let draftBoard = null;
+    try {
+      draftBoard = await buildDraftBoard();
+    } catch (err) {
+      console.error("Draft board build failed:", err);
+    }
+    state.draftBoard = draftBoard;
+
+    renderContractHorizon(draftBoard);
     initTradeMachine();
     renderRulesPage("");
-    renderDraftPage();
+    renderDraftPage(draftBoard);
     buildSearchIndex();
   } catch (err) {
     console.error(err);
@@ -2982,5 +3067,5 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("#rules-search").addEventListener("input", (e) => renderRulesPage(e.target.value));
   const horizonSortEl = $("#horizon-sort");
-  if (horizonSortEl) horizonSortEl.addEventListener("change", renderContractHorizon);
+  if (horizonSortEl) horizonSortEl.addEventListener("change", () => renderContractHorizon(state.draftBoard));
 });
