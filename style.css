@@ -916,7 +916,7 @@ select, input[type="search"] {
 }
 
 .draft-pick-team {
-  font-size: 0.8rem;
+  font-size: 0.68rem;
   font-weight: 600;
   color: var(--text);
   overflow-wrap: break-word;
