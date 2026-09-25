@@ -1059,7 +1059,7 @@ function allActiveRosterEntries() {
   return out;
 }
 
-function leaderboardRowHTML(rank, primary, secondary, valueLabel) {
+function leaderboardRowHTML(rank, primary, secondary, valueLabel, negative) {
   return `
     <div class="lb-row">
       <span class="lb-rank">${rank}</span>
@@ -1067,7 +1067,7 @@ function leaderboardRowHTML(rank, primary, secondary, valueLabel) {
         <span class="lb-player">${primary}</span>
         <span class="lb-sub">${secondary}</span>
       </span>
-      <span class="lb-value">${valueLabel}</span>
+      <span class="lb-value${negative ? " lb-value-negative" : ""}">${valueLabel}</span>
     </div>
   `;
 }
@@ -1092,7 +1092,8 @@ function renderLeaderboards() {
         i + 1,
         `${p.name} (${p.pos})`,
         `${teamName(p.rosterId)} · ${money(p.salary)} salary · ${p.pts.toFixed(1)} pts`,
-        `${p.value.toFixed(2)} pts/$`
+        `${p.value.toFixed(2)} pts/$`,
+        p.value < 0
       )
     )
     .join("") || '<div class="empty-state">Not enough stats yet this season.</div>';
@@ -1132,7 +1133,8 @@ function renderLeaderboards() {
           i + 1,
           `${p.name} (${p.pos})`,
           `${teamName(p.rosterId)} · ${money(p.salary)} salary · ${p.pts.toFixed(1)} pts`,
-          `${p.value.toFixed(2)} pts/$`
+          `${p.value.toFixed(2)} pts/$`,
+          p.value < 0
         )
       )
       .join("") || '<div class="empty-state">Not enough stats yet this season.</div>';
@@ -1157,7 +1159,15 @@ function renderLeaderboards() {
       const rosterEntry = activeByPlayerId.get(pid);
       const pts = state.pointsByPlayer.get(pid) || 0;
       const cost = Math.max(ev.amount, 1);
-      return { name: rosterEntry.name, pos: rosterEntry.pos, rosterId: ev.rosterIds[0], bid: ev.amount, pts, value: pts / cost };
+      return {
+        name: rosterEntry.name,
+        pos: rosterEntry.pos,
+        rosterId: ev.rosterIds[0],
+        bid: ev.amount,
+        addedDate: ev.date,
+        pts,
+        value: pts / cost,
+      };
     })
     .filter((p) => p.pts > 0)
     .sort((a, b) => b.value - a.value)
@@ -1165,14 +1175,18 @@ function renderLeaderboards() {
 
   $("#lb-waiver").innerHTML =
     waiverRanked
-      .map((p, i) =>
-        leaderboardRowHTML(
+      .map((p, i) => {
+        const addedLabel = p.addedDate
+          ? new Date(p.addedDate).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+          : "unknown date";
+        return leaderboardRowHTML(
           i + 1,
           `${p.name} (${p.pos})`,
-          `${teamName(p.rosterId)} · $${p.bid} FAAB · ${p.pts.toFixed(1)} pts`,
-          `${p.value.toFixed(2)} pts/$`
-        )
-      )
+          `${teamName(p.rosterId)} · $${p.bid} FAAB · added ${addedLabel} · ${p.pts.toFixed(1)} pts`,
+          `${p.value.toFixed(2)} pts/$`,
+          p.value < 0
+        );
+      })
       .join("") || '<div class="empty-state">No paid waiver claims found yet this season.</div>';
 
   // Most improved: PPG in the most recent weeks vs. the season's first half,
@@ -1206,7 +1220,8 @@ function renderLeaderboards() {
           i + 1,
           `${p.name} (${p.pos})`,
           `${teamName(p.rosterId)} · ${p.earlyPPG.toFixed(1)} → ${p.recentPPG.toFixed(1)} PPG`,
-          `+${p.improvement.toFixed(1)} PPG`
+          `${p.improvement >= 0 ? "+" : ""}${p.improvement.toFixed(1)} PPG`,
+          p.improvement < 0
         )
       )
       .join("") || '<div class="empty-state">Not enough weeks played yet to compare trends.</div>';
@@ -1421,8 +1436,11 @@ async function buildH2HData() {
       if (!r.owner_id) continue;
       rosterToUser.set(r.roster_id, r.owner_id);
       const u = userMap.get(r.owner_id) || {};
-      const teamName = (u.metadata && u.metadata.team_name) || u.display_name || `Roster ${r.roster_id}`;
-      ensureUser(r.owner_id, teamName, u.avatar ? `https://sleepercdn.com/avatars/thumbs/${u.avatar}` : null);
+      // Use the owner's Sleeper username rather than that season's team name —
+      // team names get rebranded over the years, but the username is the
+      // stable identity a manager keeps across every season.
+      const ownerLabel = u.display_name || `Manager ${r.owner_id}`;
+      ensureUser(r.owner_id, ownerLabel, u.avatar ? `https://sleepercdn.com/avatars/thumbs/${u.avatar}` : null);
     }
 
     const maxWeek = CFG.maxWeek || 18;
