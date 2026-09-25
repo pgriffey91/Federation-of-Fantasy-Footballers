@@ -28,6 +28,9 @@ const state = {
   onThisDay: { loaded: false, loading: false, data: null }, // trades + drafts on this calendar day, any season (lazy-loaded)
   rawTransactions: [], // this season's deduped, complete transactions
   draftBoard: null, // next season's draft board (built once in init, shared with Contract Horizon)
+  seasonChainPromise: null, // cached collectSeasonChain() result, shared by every full-history feature
+  allSeasonsTradeIndexPromise: null, // cached buildAllSeasonsTradeIndex() result (Draft Board pick-acquisition lookup)
+  playerHistoryIndexPromise: null, // cached buildPlayerHistoryIndex() result (player card transaction history)
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -64,6 +67,30 @@ function setStatus(msg) {
 function money(n) {
   const sign = n < 0 ? "-" : "";
   return `${sign}$${Math.abs(Math.round(n))}`;
+}
+
+// The rulebook's keeper-salary escalator tiers (based on the player's
+// CURRENT salary): $1-5 doubles, $6-10 +75%, $11-15 +50%, $16-20 +25%,
+// $21-30 +15%, $31-45 +12.5%, $46-60 +10%, above $60 +7.5%. The sheet
+// already computes next year's number for us (the keeper2027 column) — this
+// function exists only so the player card can project ONE more year out
+// (season-after-next), which the sheet doesn't provide, by applying the same
+// tiers a second time. That's a two-years-out estimate, not a sheet-sourced
+// figure, and the UI says so.
+const KEEPER_ESCALATOR_TIERS = [
+  { max: 5, pct: 1 },
+  { max: 10, pct: 0.75 },
+  { max: 15, pct: 0.5 },
+  { max: 20, pct: 0.25 },
+  { max: 30, pct: 0.15 },
+  { max: 45, pct: 0.125 },
+  { max: 60, pct: 0.1 },
+  { max: Infinity, pct: 0.075 },
+];
+function escalateKeeperSalary(salary) {
+  if (!salary || salary <= 0) return 0;
+  const tier = KEEPER_ESCALATOR_TIERS.find((t) => salary <= t.max) || KEEPER_ESCALATOR_TIERS[KEEPER_ESCALATOR_TIERS.length - 1];
+  return Math.round(salary * (1 + tier.pct));
 }
 
 /* ---------- Players database (cached in localStorage) ---------- */
@@ -1592,17 +1619,30 @@ function initTradeMachine() {
 
 // Walks the league's previous_league_id chain back to its root season.
 // Returns league objects, most recent season first.
+// Cached at the state level: every full-history feature (Record Book, On
+// This Day, the Draft Board's pick-acquisition lookup, and the player card's
+// transaction history) walks the same season chain, so whichever one runs
+// first fetches it and the rest reuse the same promise instead of
+// re-fetching one league-shell request per past season each time.
 async function collectSeasonChain() {
-  const chain = [];
-  let leagueId = CFG.leagueId;
-  const seen = new Set();
-  while (leagueId && !seen.has(leagueId)) {
-    seen.add(leagueId);
-    const league = await fetchJSON(`${API}/league/${leagueId}`);
-    chain.push(league);
-    leagueId = league.previous_league_id || null;
-  }
-  return chain;
+  if (state.seasonChainPromise) return state.seasonChainPromise;
+  const promise = (async () => {
+    const chain = [];
+    let leagueId = CFG.leagueId;
+    const seen = new Set();
+    while (leagueId && !seen.has(leagueId)) {
+      seen.add(leagueId);
+      const league = await fetchJSON(`${API}/league/${leagueId}`);
+      chain.push(league);
+      leagueId = league.previous_league_id || null;
+    }
+    return chain;
+  })();
+  state.seasonChainPromise = promise;
+  promise.catch(() => {
+    state.seasonChainPromise = null; // allow a retry on the next call rather than caching a failure forever
+  });
+  return promise;
 }
 
 // Aggregates all-time head-to-head records, playoff appearances, and
@@ -2511,6 +2551,176 @@ async function findPickAcquisition(originalRid, round, season, ownerRid) {
   return { type: "trade", date: match.ts, teams: match.teams };
 }
 
+// Builds a full-history index (every complete trade, add, and drop across
+// every past season, oldest league first) for the player card's transaction
+// history. Walking every season's every week is the same "expensive, only
+// worth doing once" cost as Record Book/On This Day/the pick-acquisition
+// lookup above — this is its own separate pass rather than sharing
+// buildAllSeasonsTradeIndex's cache, because that one only keeps trades that
+// moved a draft pick and throws away adds/drops entirely, which is exactly
+// the data a player's history needs. It's built lazily on first use and
+// cached for the rest of the session (state.playerHistoryIndexPromise), so
+// opening a second player card is instant.
+async function buildPlayerHistoryIndex() {
+  const chain = await collectSeasonChain();
+  const CONCURRENCY = 6;
+  const trades = [];
+  const adds = [];
+  const drops = [];
+
+  const seasonToLeagueId = new Map(chain.map((l) => [String(l.season), l.league_id]));
+  const draftInfoCache = new Map();
+
+  // Same pick -> drafted-player resolution as buildAllSeasonsTradeIndex
+  // (see its comments for why slot_to_roster_id needs its own fetch).
+  async function getDraftInfo(season) {
+    const leagueId = seasonToLeagueId.get(String(season));
+    if (!leagueId) return null;
+    if (draftInfoCache.has(leagueId)) return draftInfoCache.get(leagueId);
+    let info = null;
+    try {
+      const seasonDrafts = await fetchJSON(`${API}/league/${leagueId}/drafts`);
+      const draftSummary = pickRookieDraft(seasonDrafts);
+      if (draftSummary) {
+        const [draft, picks] = await Promise.all([
+          fetchJSON(`${API}/draft/${draftSummary.draft_id}`),
+          fetchJSON(`${API}/draft/${draftSummary.draft_id}/picks`),
+        ]);
+        if (draft && draft.slot_to_roster_id && picks && picks.length) {
+          const picksByNo = new Map(picks.map((p) => [p.pick_no, p]));
+          const slotToRoster = new Map(
+            Object.entries(draft.slot_to_roster_id).map(([slot, rid]) => [Number(rid), Number(slot)])
+          );
+          const teamCount = Object.keys(draft.slot_to_roster_id).length || 10;
+          info = { slotToRoster, picksByNo, teamCount };
+        }
+      }
+    } catch (err) {
+      console.error(`Player history: draft lookup failed for season ${season}`, err);
+    }
+    draftInfoCache.set(leagueId, info);
+    return info;
+  }
+
+  async function resolveDraftedPlayer(season, round, originalRid) {
+    const info = await getDraftInfo(season);
+    if (!info) return null;
+    const slot = info.slotToRoster.get(Number(originalRid));
+    if (!slot) return null;
+    const pickNo = (round - 1) * info.teamCount + slot;
+    const pick = info.picksByNo.get(pickNo);
+    if (!pick) return null;
+    if (pick.player_id) return playerLabel(pick.player_id);
+    const meta = pick.metadata || {};
+    return [meta.first_name, meta.last_name].filter(Boolean).join(" ") || null;
+  }
+
+  for (const league of chain) {
+    const leagueId = league.league_id;
+    const season = league.season;
+    let users, rosters;
+    try {
+      [users, rosters] = await Promise.all([
+        fetchJSON(`${API}/league/${leagueId}/users`),
+        fetchJSON(`${API}/league/${leagueId}/rosters`),
+      ]);
+    } catch (err) {
+      console.error(`Player history: users/rosters failed for league ${leagueId}`, err);
+      continue;
+    }
+    const userMap = new Map(users.map((u) => [u.user_id, u]));
+    const rosterName = new Map();
+    for (const r of rosters) {
+      const u = userMap.get(r.owner_id) || {};
+      rosterName.set(r.roster_id, (u.metadata && u.metadata.team_name) || u.display_name || `Roster ${r.roster_id}`);
+    }
+
+    const maxWeek = CFG.maxWeek || 18;
+    const weeks = Array.from({ length: maxWeek }, (_, i) => i + 1);
+    const weekTx = [];
+    for (let i = 0; i < weeks.length; i += CONCURRENCY) {
+      const slice = weeks.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(
+        slice.map((w) => fetchJSON(`${API}/league/${leagueId}/transactions/${w}`).catch(() => []))
+      );
+      weekTx.push(...results.flat());
+    }
+
+    const seen = new Set();
+    for (const tx of weekTx) {
+      if (!tx || seen.has(tx.transaction_id) || tx.status !== "complete") continue;
+      seen.add(tx.transaction_id);
+      const ts = tx.status_updated || tx.created || 0;
+
+      if (tx.type === "trade") {
+        const rosterIds = tx.roster_ids || [];
+        const gains = new Map();
+        for (const rid of rosterIds) gains.set(rid, { gained: [], playerIds: [] });
+        for (const [pid, rid] of Object.entries(tx.adds || {})) {
+          if (!gains.has(rid)) gains.set(rid, { gained: [], playerIds: [] });
+          gains.get(rid).gained.push(playerLabel(pid));
+          gains.get(rid).playerIds.push(String(pid));
+        }
+        for (const pick of tx.draft_picks || []) {
+          const toRoster = pick.owner_id;
+          if (!gains.has(toRoster)) gains.set(toRoster, { gained: [], playerIds: [] });
+          const suffix = pick.round === 1 ? "st" : pick.round === 2 ? "nd" : pick.round === 3 ? "rd" : "th";
+          const fromName = rosterName.get(pick.roster_id) || `Roster ${pick.roster_id}`;
+          // Same rule the Draft Board's pick-acquisition drawer follows: once
+          // that season's draft has happened, show who the pick turned into
+          // instead of just naming the pick.
+          const drafted = await resolveDraftedPlayer(pick.season, pick.round, pick.roster_id);
+          const label = drafted
+            ? `${pick.season} ${pick.round}${suffix}-round pick — ${drafted}`
+            : `${pick.season} ${pick.round}${suffix}-round pick (${fromName}'s)`;
+          gains.get(toRoster).gained.push(label);
+        }
+        for (const move of tx.waiver_budget || []) {
+          if (!gains.has(move.receiver)) gains.set(move.receiver, { gained: [], playerIds: [] });
+          gains.get(move.receiver).gained.push(`$${move.amount} FAAB`);
+        }
+        const teams = Array.from(gains.entries()).map(([rid, g]) => ({
+          rid,
+          name: rosterName.get(rid) || `Roster ${rid}`,
+          gained: g.gained.length ? g.gained : ["nothing notable"],
+          playerIds: g.playerIds,
+        }));
+        trades.push({ ts, season, teams });
+      } else {
+        const bid = tx.settings && typeof tx.settings.waiver_bid === "number" ? tx.settings.waiver_bid : null;
+        for (const [pid, rid] of Object.entries(tx.adds || {})) {
+          adds.push({ ts, season, playerId: String(pid), teamName: rosterName.get(rid) || `Roster ${rid}`, bid, txType: tx.type });
+        }
+        for (const [pid, rid] of Object.entries(tx.drops || {})) {
+          drops.push({ ts, season, playerId: String(pid), teamName: rosterName.get(rid) || `Roster ${rid}` });
+        }
+      }
+    }
+  }
+
+  return { trades, adds, drops };
+}
+
+// Filters the full-history index down to one player's events, newest first.
+function getPlayerHistory(playerId, index) {
+  const pid = String(playerId);
+  const events = [];
+  for (const t of index.trades) {
+    const involvedTeams = t.teams.filter((team) => team.playerIds.includes(pid));
+    if (involvedTeams.length) {
+      events.push({ ts: t.ts, season: t.season, type: "trade", trade: t });
+    }
+  }
+  for (const a of index.adds) {
+    if (a.playerId === pid) events.push({ ts: a.ts, season: a.season, type: "add", team: a.teamName, bid: a.bid, txType: a.txType });
+  }
+  for (const d of index.drops) {
+    if (d.playerId === pid) events.push({ ts: d.ts, season: d.season, type: "drop", team: d.teamName });
+  }
+  events.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return events;
+}
+
 // Builds the 4-round / 40-pick rookie draft order for next season.
 // Picks 1-4: the 4 non-playoff teams (seeds 7-10), ordered by Max PF
 // ascending (lowest Max PF picks first). Picks 5-10: the 6 playoff teams
@@ -2764,12 +2974,14 @@ let searchActiveIndex = -1;
 // free agents, so they're shown without a salary rather than a fabricated one.
 function buildSearchIndex() {
   const rosteredByName = new Map();
+  rosteredByPlayerId.clear();
 
   for (const rid of Object.keys(state.sheetByRoster)) {
     const sheet = state.sheetByRoster[rid];
     const addSection = (rows, section) => {
       for (const p of rows || []) {
-        rosteredByName.set(SheetData.normalizeName(p.name), {
+        const playerId = playerIdForName(p.name) || null;
+        const entry = {
           name: p.name,
           pos: p.pos,
           salary: p.salary,
@@ -2777,7 +2989,10 @@ function buildSearchIndex() {
           rosterId: Number(rid),
           section,
           status: "rostered",
-        });
+          playerId,
+        };
+        rosteredByName.set(SheetData.normalizeName(p.name), entry);
+        if (playerId) rosteredByPlayerId.set(String(playerId), entry);
       }
     };
     addSection(sheet.activeRoster, "Active Roster");
@@ -2786,11 +3001,11 @@ function buildSearchIndex() {
   }
 
   const freeAgents = [];
-  for (const p of state.players.values()) {
+  for (const [playerId, p] of state.players.entries()) {
     if (!SEARCH_POSITIONS.has(p.pos)) continue;
     const norm = SheetData.normalizeName(p.name);
     if (!norm || rosteredByName.has(norm)) continue;
-    freeAgents.push({ name: p.name, pos: p.pos, nflTeam: p.team, status: "free-agent" });
+    freeAgents.push({ name: p.name, pos: p.pos, nflTeam: p.team, status: "free-agent", playerId });
   }
 
   searchIndexData = [...rosteredByName.values(), ...freeAgents];
@@ -2802,6 +3017,7 @@ function buildSearchIndex() {
 }
 
 let searchIndexData = [];
+const rosteredByPlayerId = new Map(); // player_id -> search entry (name/pos/salary/keeper2027/rosterId/section)
 
 function searchResultRowHTML(entry, idx) {
   let sub, value;
@@ -2858,20 +3074,7 @@ function selectSearchResult(idx) {
   const entry = searchHits[idx];
   if (!entry) return;
   closeSearchModal();
-  if (entry.status !== "rostered") return; // free agents have no team page to jump to
-  document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
-  const rostersBtn = document.querySelector('.nav-btn[data-page="rosters"]');
-  if (rostersBtn) rostersBtn.classList.add("active");
-  document.querySelectorAll(".page").forEach((p) => (p.hidden = true));
-  const rostersPage = $("#page-rosters");
-  if (rostersPage) rostersPage.hidden = false;
-  const card = $(`#roster-card-${entry.rosterId}`);
-  if (card) {
-    card.open = true;
-    card.scrollIntoView({ behavior: "smooth", block: "start" });
-    card.classList.add("roster-card-highlight");
-    setTimeout(() => card.classList.remove("roster-card-highlight"), 1500);
-  }
+  if (entry.playerId) openPlayerCard(entry.playerId);
 }
 
 function openSearchModal() {
@@ -2949,6 +3152,184 @@ function initGlobalSearch() {
     if (e.key === "Escape" && overlayOpen) {
       closeSearchModal();
     }
+  });
+}
+
+/* ---------- Player Card ---------- */
+
+let playerCardToken = 0;
+
+function playerCardStatsHTML({ name, pos, nflTeam, rosterInfo, pts, games, ppg }) {
+  const season = (state.league && state.league.season) || "";
+  const nextSeason = String(Number(season || 0) + 1);
+  const seasonAfter = String(Number(season || 0) + 2);
+
+  const rosterLine = rosterInfo
+    ? `${teamName(rosterInfo.rosterId)} · ${rosterInfo.section}`
+    : "Free Agent — not currently on any roster";
+
+  const salaryNow = rosterInfo ? rosterInfo.salary : null;
+  const salaryNext = rosterInfo && rosterInfo.keeper2027 > 0 ? rosterInfo.keeper2027 : null;
+  const salaryAfter = salaryNext ? escalateKeeperSalary(salaryNext) : null;
+
+  return `
+    <div class="player-card-meta">
+      <span class="player-card-team-line">${nflTeam || "FA"}${pos ? ` · ${pos}` : ""}</span>
+      <span class="player-card-roster-line">${rosterLine}</span>
+    </div>
+
+    <h4 class="player-card-section-title">${season} Season</h4>
+    <div class="player-card-stat-row">
+      <div class="player-card-stat"><span class="player-card-stat-value">${pts.toFixed(1)}</span><span class="player-card-stat-label">Total Pts</span></div>
+      <div class="player-card-stat"><span class="player-card-stat-value">${ppg.toFixed(1)}</span><span class="player-card-stat-label">Pts / Gm</span></div>
+      <div class="player-card-stat"><span class="player-card-stat-value">${games}</span><span class="player-card-stat-label">Games</span></div>
+    </div>
+
+    <h4 class="player-card-section-title">Salary</h4>
+    <div class="player-card-cost-row">
+      <div class="player-card-cost"><span class="player-card-cost-label">${season}</span><span class="player-card-cost-value">${salaryNow != null ? money(salaryNow) : "—"}</span></div>
+      <div class="player-card-cost"><span class="player-card-cost-label">${nextSeason} if kept</span><span class="player-card-cost-value">${salaryNext != null ? money(salaryNext) : "—"}</span></div>
+      <div class="player-card-cost"><span class="player-card-cost-label">${seasonAfter} est.</span><span class="player-card-cost-value">${salaryAfter != null ? `~${money(salaryAfter)}` : "—"}</span></div>
+    </div>
+    ${
+      salaryAfter != null
+        ? `<p class="player-card-note">The ${seasonAfter} figure isn't from the sheet — it applies the league's escalator tiers a second time on top of the ${nextSeason} number, two offseasons out, so treat it as a ballpark, not a lock.</p>`
+        : ""
+    }
+  `;
+}
+
+function playerHistoryEventHTML(ev) {
+  const dateLabel = ev.ts
+    ? new Date(ev.ts).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+    : "";
+
+  if (ev.type === "trade") {
+    return `
+      <div class="player-history-item">
+        <div class="player-history-item-head">
+          <span class="player-history-badge player-history-badge-trade">🔁 Traded</span>
+          <span class="player-history-date">${dateLabel} · ${ev.season}</span>
+        </div>
+        <div class="otd-trade-teams">
+          ${ev.trade.teams
+            .map(
+              (team) => `
+            <div class="otd-trade-team">
+              <div class="otd-trade-team-name">${team.name}</div>
+              <div class="otd-trade-arrow">received</div>
+              <ul class="otd-trade-gains">${team.gained.map((g) => `<li>${g}</li>`).join("")}</ul>
+            </div>
+          `
+            )
+            .join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  if (ev.type === "add") {
+    const via =
+      ev.txType === "waiver"
+        ? ev.bid != null
+          ? `waiver claim, $${ev.bid} FAAB`
+          : "waiver claim"
+        : ev.txType === "free_agent"
+        ? "free agency"
+        : ev.txType || "added";
+    return `
+      <div class="player-history-item">
+        <div class="player-history-item-head">
+          <span class="player-history-badge player-history-badge-add">➕ Added</span>
+          <span class="player-history-date">${dateLabel} · ${ev.season}</span>
+        </div>
+        <p class="player-history-detail">${ev.team} — ${via}</p>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="player-history-item">
+      <div class="player-history-item-head">
+        <span class="player-history-badge player-history-badge-drop">➖ Dropped</span>
+        <span class="player-history-date">${dateLabel} · ${ev.season}</span>
+      </div>
+      <p class="player-history-detail">${ev.team}</p>
+    </div>
+  `;
+}
+
+function playerCardHistoryHTML(history) {
+  if (!history || !history.length) {
+    return '<p class="empty-state">No trade, add, or drop history found for this player.</p>';
+  }
+  return `<div class="player-history-list">${history.map(playerHistoryEventHTML).join("")}</div>`;
+}
+
+async function openPlayerCard(playerId) {
+  const overlay = $("#player-card-overlay");
+  const titleEl = $("#player-card-title");
+  const bodyEl = $("#player-card-body");
+  if (!overlay || !bodyEl) return;
+
+  const myToken = ++playerCardToken;
+
+  const player = state.players.get(String(playerId));
+  const name = player ? player.name : `Player ${playerId}`;
+  const pos = player ? player.pos : "";
+  const nflTeam = player ? player.team : "";
+  if (titleEl) titleEl.textContent = pos ? `${name} (${pos})` : name;
+  overlay.hidden = false;
+
+  const rosterInfo = rosteredByPlayerId.get(String(playerId)) || null;
+  const pts = state.pointsByPlayer.get(String(playerId)) || 0;
+  const games = state.gamesPlayedByPlayer.get(String(playerId)) || 0;
+  const ppg = games > 0 ? pts / games : 0;
+  const statsHtml = playerCardStatsHTML({ name, pos, nflTeam, rosterInfo, pts, games, ppg });
+
+  bodyEl.innerHTML = `
+    ${statsHtml}
+    <h4 class="player-card-section-title">Transaction History</h4>
+    <p class="empty-state">Looking up trade/add/drop history across every past season…</p>
+  `;
+
+  let history = null;
+  let historyFailed = false;
+  try {
+    if (!state.playerHistoryIndexPromise) state.playerHistoryIndexPromise = buildPlayerHistoryIndex();
+    const index = await state.playerHistoryIndexPromise;
+    history = getPlayerHistory(playerId, index);
+  } catch (err) {
+    console.error("Player history lookup failed:", err);
+    state.playerHistoryIndexPromise = null; // allow a retry next time
+    historyFailed = true;
+  }
+
+  if (myToken !== playerCardToken) return; // a different player card was opened while this was loading
+
+  bodyEl.innerHTML = `
+    ${statsHtml}
+    <h4 class="player-card-section-title">Transaction History</h4>
+    ${historyFailed ? '<p class="empty-state">Couldn\'t load transaction history right now — try again in a moment.</p>' : playerCardHistoryHTML(history)}
+  `;
+}
+
+function closePlayerCard() {
+  const overlay = $("#player-card-overlay");
+  if (overlay) overlay.hidden = true;
+}
+
+function initPlayerCard() {
+  const overlay = $("#player-card-overlay");
+  const closeBtn = $("#player-card-close");
+  if (closeBtn) closeBtn.addEventListener("click", closePlayerCard);
+  if (overlay) {
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) closePlayerCard();
+    });
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && overlay && !overlay.hidden) closePlayerCard();
   });
 }
 
@@ -3052,6 +3433,7 @@ async function init() {
 document.addEventListener("DOMContentLoaded", () => {
   initNav();
   initGlobalSearch();
+  initPlayerCard();
   init();
 
   $("#team-filter").addEventListener("change", applyFilters);
