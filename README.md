@@ -88,14 +88,24 @@ a searchable rule book. Built to be hosted for free on GitHub Pages.
   1-4 set by Max PF ascending, picks 5-10 by current playoff seed worst-first,
   with traded picks resolved live and shown as "via &lt;original team&gt;"),
   plus the rookie salary schedule and free-agency/waiver rules.
-- **Head-to-Head** — a card per current manager with trophy-room badges
-  (championships 🏆, runner-ups 🥈, 3rd-place finishes 🥉, playoff
-  appearances ⛳); click a card to open a side drawer with that manager's
-  all-time head-to-head record against every other manager. Built by walking
-  the league's `previous_league_id` chain back to its very first season, so
-  it covers the league's full history — this makes a lot of Sleeper API
-  calls, so it's only loaded the first time you open the page, not on
-  initial page load.
+- **Head-to-Head** — a career leaderboard table (record, top-3-scoring
+  seasons, playoff appearances, titles, championship-game appearances, #1
+  seeds, trades, rookie-Draft-Pick Conversion Rate, and Points-For vs.
+  Max-PF coaching efficiency), plus a card per current manager with a
+  trophy-room key (championships 🏆, runner-ups 🥈, 3rd-place finishes 🥉,
+  playoff appearances ⛳) — click a card to open a side drawer with that
+  manager's all-time head-to-head record against every other manager.
+  Labeled by each owner's Sleeper username rather than that season's team
+  name, since franchise names get rebranded over the years but usernames
+  don't. Built by walking the league's `previous_league_id` chain back to
+  its very first season, so it covers the league's full history — this
+  makes a lot of Sleeper API calls, so it's only loaded the first time you
+  open the page, not on initial page load. Two notes on the trickier stats:
+  Pick Conversion counts a rookie pick as "converted" if that GM never
+  released the player within two seasons of drafting him (recent rookie
+  picks aren't old enough to score yet, so they're excluded rather than
+  counted against anyone); PF/Max PF is a career-wide aggregate, not an
+  average of season percentages.
 - **On This Day** — every trade, plus full results from any startup/rookie
   draft, that happened on today's calendar date in any past season. Walks
   the same full season history as Head-to-Head, so it's lazy-loaded on
