@@ -31,6 +31,7 @@
         <button class="nav-btn" data-page="caphealth">Cap Health</button>
         <button class="nav-btn" data-page="rosters">League Rosters</button>
         <button class="nav-btn" data-page="leaderboards">Leaderboards</button>
+        <button class="nav-btn" data-page="horizon">Contract Horizon</button>
         <button class="nav-btn" data-page="trade">Trade Machine</button>
         <button class="nav-btn" data-page="draft">Draft &amp; FA</button>
         <button class="nav-btn" data-page="h2h">Record Book</button>
@@ -108,23 +109,6 @@
       <p class="page-sub">Biggest jump in points-per-game, first half of the season vs. most recent weeks.</p>
       <div id="lb-improved" class="leaderboard-grid"></div>
 
-      <h2 class="page-heading">Contract Horizon</h2>
-      <p class="page-sub">
-        Every rostered player's projected 2027 salary if kept, using the league's keeper-escalator schedule.
-        This format has no fixed contract lengths — every player renews at the escalator rate or gets cut each
-        offseason — so this is the full roster, not an "expiring contracts" subset that doesn't exist here.
-      </p>
-      <div class="control-group horizon-filter-group">
-        <label for="horizon-filter">Show</label>
-        <select id="horizon-filter">
-          <option value="0">All rostered players</option>
-          <option value="10">Escalating $10+ next year</option>
-          <option value="20">Escalating $20+ next year</option>
-          <option value="30">Escalating $30+ next year</option>
-        </select>
-      </div>
-      <div id="lb-horizon" class="leaderboard-grid"></div>
-
       <h2 class="page-heading">Most Active Traders</h2>
       <p class="page-sub">
         We skipped "Best Trades" — grading who won a trade needs a value judgment call, and it's more fun to
@@ -132,6 +116,27 @@
         made the most trades this season.
       </p>
       <div id="lb-traders" class="leaderboard-grid"></div>
+    </section>
+
+    <!-- CONTRACT HORIZON -->
+    <section id="page-horizon" class="page" hidden>
+      <h2 class="page-heading">Contract Horizon</h2>
+      <p class="page-sub">
+        Every roster's projected 2027 salary situation if every current player is kept, using the league's
+        keeper-escalator schedule. This format has no fixed contract lengths — every player renews at the
+        escalator rate or gets cut each offseason — so there's no real "expiring contract" subset; instead
+        this shows the full cap picture each team is looking at heading into next year.
+      </p>
+      <div class="control-group horizon-sort-group">
+        <label for="horizon-sort">Sort teams by</label>
+        <select id="horizon-sort">
+          <option value="total">Projected 2027 total (highest first)</option>
+          <option value="increase">Total raise next year (highest first)</option>
+          <option value="cap">Current cap space (tightest first)</option>
+          <option value="name">Team name</option>
+        </select>
+      </div>
+      <div id="horizon-body" class="horizon-grid"></div>
     </section>
 
     <!-- TRADE MACHINE -->
