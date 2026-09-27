@@ -1548,20 +1548,39 @@ function renderTradeRosterList(side) {
     return;
   }
 
-  listEl.innerHTML = sheet.activeRoster
-    .map((p) => {
-      const key = `${side}:${p.name}`;
-      const maxRetain = Math.min(CFG.maxRetainedSalary, p.salary);
-      return `
-        <label class="trade-player-row">
-          <input type="checkbox" class="trade-player-check" data-side="${side}" data-key="${key}" data-salary="${p.salary}">
-          <span class="trade-player-name">${p.name} (${p.pos})</span>
-          <span class="trade-player-salary">${money(p.salary)}</span>
-          <span class="trade-retain">
-            Retain $<input type="number" min="0" max="${maxRetain}" value="0" class="trade-retain-input" data-side="${side}" data-key="${key}" disabled>
-          </span>
-        </label>
-      `;
+  // Every tradable player — not just the active roster. Taxi-squad and IR
+  // players can be traded too; taxi players are flagged specially because
+  // (per the rulebook) a traded taxi player loses taxi eligibility and lands
+  // on the RECEIVING team's active roster, so their salary goes from
+  // counting against nobody's cap to counting fully against the new team's —
+  // it isn't a like-for-like cap swap the way an active-roster trade is.
+  const sectionGroups = [
+    { key: "activeRoster", label: "Active Roster", players: sheet.activeRoster },
+    { key: "taxiSquad", label: "Taxi Squad", players: sheet.taxiSquad },
+    { key: "ir", label: "IR", players: sheet.ir },
+  ].filter((g) => g.players && g.players.length);
+
+  listEl.innerHTML = sectionGroups
+    .map((group) => {
+      const rows = group.players
+        .map((p) => {
+          const key = `${side}:${p.name}`;
+          const isTaxi = group.key === "taxiSquad";
+          const maxRetain = Math.min(CFG.maxRetainedSalary, p.salary);
+          const retainCell = isTaxi
+            ? `<span class="trade-retain trade-retain-na" title="Taxi-squad salary doesn't count against your cap, so there's nothing to retain — it counts fully against the other team's cap on arrival.">Full cap on arrival</span>`
+            : `<span class="trade-retain">Retain $<input type="number" min="0" max="${maxRetain}" value="0" class="trade-retain-input" data-side="${side}" data-key="${key}" disabled></span>`;
+          return `
+            <label class="trade-player-row">
+              <input type="checkbox" class="trade-player-check" data-side="${side}" data-key="${key}" data-salary="${p.salary}" data-section="${group.key}">
+              <span class="trade-player-name">${p.name} (${p.pos})</span>
+              <span class="trade-player-salary">${money(p.salary)}</span>
+              ${retainCell}
+            </label>
+          `;
+        })
+        .join("");
+      return `<div class="trade-roster-section"><h4 class="trade-roster-section-title">${group.label}</h4>${rows}</div>`;
     })
     .join("");
 
@@ -1569,11 +1588,11 @@ function renderTradeRosterList(side) {
     cb.addEventListener("change", (e) => {
       const key = e.target.dataset.key;
       const retainInput = listEl.querySelector(`.trade-retain-input[data-key="${CSS.escape(key)}"]`);
-      retainInput.disabled = !e.target.checked;
-      if (!e.target.checked) {
-        delete state.trade.retained[key];
-        retainInput.value = 0;
+      if (retainInput) {
+        retainInput.disabled = !e.target.checked;
+        if (!e.target.checked) retainInput.value = 0;
       }
+      if (!e.target.checked) delete state.trade.retained[key];
       recomputeTrade();
     })
   );
@@ -1596,25 +1615,40 @@ function recomputeTrade() {
     return;
   }
 
+  // Taxi-squad salary doesn't count against the sending team's cap today, so
+  // trading one away frees up nothing on that side — but the rulebook says a
+  // traded taxi player loses taxi eligibility and lands straight on the
+  // receiving team's active roster, so it counts fully once it arrives.
+  // That's a one-way cap hit, not the symmetric swap an active/IR trade is
+  // (IR salary already counts against the cap today per the rulebook, apart
+  // from a Season-Ending IR designation's 50% relief, so it moves like an
+  // active-roster player).
   const netMove = (side) => {
     const checks = document.querySelectorAll(`.trade-player-check[data-side="${side}"]:checked`);
-    let total = 0;
+    let fromSenderCap = 0; // frees up space on the side trading the player away
+    let toReceiverCap = 0; // adds to the side receiving the player
     checks.forEach((cb) => {
       const salary = Number(cb.dataset.salary);
-      const retained = state.trade.retained[cb.dataset.key] || 0;
-      total += salary - retained;
+      const section = cb.dataset.section;
+      if (section === "taxiSquad") {
+        toReceiverCap += salary;
+      } else {
+        const retained = state.trade.retained[cb.dataset.key] || 0;
+        fromSenderCap += salary - retained;
+        toReceiverCap += salary - retained;
+      }
     });
-    return total;
+    return { fromSenderCap, toReceiverCap };
   };
 
-  const moveFromA = netMove("A"); // cap that leaves A's books, lands on B's
-  const moveFromB = netMove("B");
+  const moveA = netMove("A"); // what A sends away
+  const moveB = netMove("B"); // what B sends away
 
   const capA = state.sheetByRoster[ridA].cap;
   const capB = state.sheetByRoster[ridB].cap;
 
-  const newRemainingA = capA.remainingCap + moveFromA - moveFromB;
-  const newRemainingB = capB.remainingCap + moveFromB - moveFromA;
+  const newRemainingA = capA.remainingCap + moveA.fromSenderCap - moveB.toReceiverCap;
+  const newRemainingB = capB.remainingCap + moveB.fromSenderCap - moveA.toReceiverCap;
 
   const summaryHTML = (teamLabel, current, next) => `
     <div class="trade-result">
