@@ -44,7 +44,17 @@ a searchable rule book. Built to be hosted for free on GitHub Pages.
   Sleeper. It applies the rulebook's retained-salary math (up to $50) to
   show each team's resulting cap space, but doesn't account for draft picks
   or the $50/year retained-salary cap across multiple trades in a season —
-  you're still the judge of whether a hypothetical trade is legal.
+  you're still the judge of whether a hypothetical trade is legal. Every
+  tradable player is selectable, not just the active roster — taxi-squad and
+  IR players show up in their own sections. A traded taxi-squad player is a
+  special case: their salary doesn't count against the cap today, but the
+  rulebook says trading them away forfeits taxi eligibility and lands them
+  straight on the receiving team's active roster, so the calculator shows
+  that salary as a one-way hit to the RECEIVING team's cap on the way in,
+  with nothing freed up on the sending side (there's nothing to retain on a
+  player whose salary was never counted against you). IR players move like
+  normal active-roster players, since IR salary already counts against the
+  cap under the rulebook.
 
 ## One-time setup
 
