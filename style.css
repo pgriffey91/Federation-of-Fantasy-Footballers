@@ -980,6 +980,15 @@ main {
 .trade-player-name { flex: 1; }
 .trade-player-salary { color: var(--muted); width: 44px; text-align: right; }
 .trade-retain { display: flex; align-items: center; gap: 4px; font-size: 0.78rem; color: var(--muted); }
+.trade-retain-na { width: 110px; text-align: right; font-style: italic; color: var(--amber); cursor: help; }
+.trade-roster-section-title {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 14px 0 4px;
+}
+.trade-roster-section:first-child .trade-roster-section-title { margin-top: 0; }
 .trade-retain-input {
   width: 52px;
   background: #0d0f14;
