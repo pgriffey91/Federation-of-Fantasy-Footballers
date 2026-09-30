@@ -1,1 +1,9 @@
-[]
+[
+  {
+    "id": "taxi-6-12501-1790737363615-remove",
+    "type": "taxi_remove",
+    "date": 1790737363615,
+    "roster_id": 6,
+    "player_id": "12501"
+  }
+]
