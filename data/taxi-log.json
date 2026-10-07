@@ -12,5 +12,12 @@
     "date": 1790788515944,
     "roster_id": 10,
     "player_id": "12511"
+  },
+  {
+    "id": "taxi-3-13279-1791332061863-remove",
+    "type": "taxi_remove",
+    "date": 1791332061863,
+    "roster_id": 3,
+    "player_id": "13279"
   }
 ]
