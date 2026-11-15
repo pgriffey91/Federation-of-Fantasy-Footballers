@@ -47,5 +47,12 @@
     "date": 1793841027320,
     "roster_id": 6,
     "player_id": "13345"
+  },
+  {
+    "id": "taxi-2-13330-1794766398974-remove",
+    "type": "taxi_remove",
+    "date": 1794766398974,
+    "roster_id": 2,
+    "player_id": "13330"
   }
 ]
